@@ -24,6 +24,7 @@ import cv2
 # Import our custom modules
 import cooldown_detector
 import network_manager
+from capture_overlay import CaptureOverlay
 
 # Set explicit AppUserModelID on Windows to fix Taskbar Icon grouping and display issues
 import ctypes
@@ -1747,29 +1748,26 @@ class MagnifierWindow(QMainWindow):
         self.config_dialog_ref = config_dialog
         
         self.is_settings_open = True
-        self.overlay = SelectionOverlay()
-        self.overlay.areaSelected.connect(self.on_cooldown_area_captured)
-        self.overlay.closed.connect(self.restore_settings_open_state)
+        self.overlay = CaptureOverlay()
+        self.overlay.capture_completed.connect(self.on_cooldown_area_captured)
+        self.overlay.finished.connect(self.restore_settings_open_state)
         self.overlay.show()
 
     def restore_settings_open_state(self):
         self.is_settings_open = hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible()
 
-    def on_cooldown_area_captured(self, rect):
+    def on_cooldown_area_captured(self, x, y, w, h, captured_gray):
         try:
-            with mss.mss() as sct:
-                x, y, w, h = rect.x(), rect.y(), rect.width(), rect.height()
-                monitor = {"top": y, "left": x, "width": w, "height": h}
-                sct_img = sct.grab(monitor)
-                img = Image.frombytes('RGB', sct_img.size, sct_img.bgra, 'raw', 'BGRX')
-                
-                # Add to detector
-                self.detector.add_slot(self.cooldown_capture_name, rect, threshold=0.85, template_img=img)
-                
-                # Auto-save changes immediately to preserve skill slots template images
-                self.save_settings()
-        except Exception:
-            pass
+            rect = QRect(x, y, w, h)
+            # Add to detector (already cv2 array from CaptureOverlay)
+            self.detector.add_slot(self.cooldown_capture_name, rect, threshold=0.85, template_img=captured_gray)
+            
+            # Auto-save changes immediately to preserve skill slots template images
+            self.save_settings()
+        except Exception as e:
+            import traceback
+            with open("capture_error.log", "a", encoding="utf-8") as f:
+                f.write(f"Capture Error: {str(e)}\n{traceback.format_exc()}\n")
             
         # Re-show the settings modal
         if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref:

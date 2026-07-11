@@ -1,9 +1,10 @@
 import os
+import time
 import cv2
 import numpy as np
 import mss
 from PIL import Image
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer, QRect
+from PyQt6.QtCore import QThread, pyqtSignal, QRect
 
 class SkillSlot:
     def __init__(self, name="스킬", rect=None, threshold=0.85):
@@ -13,17 +14,16 @@ class SkillSlot:
         self.template_path = None
         self.is_ready = True  # Current state
         self.last_similarity = 1.0
+        self.template = None
 
-class CooldownDetector(QObject):
+class CooldownDetector(QThread):
     state_changed = pyqtSignal(str, bool, float)  # (skill_name, is_ready, similarity)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.slots = {}  # {name: SkillSlot}
-        self.sct = mss.mss()
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.scan_all)
-        self.scan_interval = 200  # ms
+        self.is_running = False
+        self.scan_interval = 0.25  # Default 250ms
         
     def add_slot(self, name, rect, threshold=0.85, template_img=None):
         slot = SkillSlot(name, rect, threshold)
@@ -48,55 +48,60 @@ class CooldownDetector(QObject):
         if name in self.slots:
             del self.slots[name]
             
-    def start(self, interval=200):
-        self.scan_interval = interval
-        self.timer.start(self.scan_interval)
+    def start_detection(self, interval_ms=250):
+        self.scan_interval = interval_ms / 1000.0
+        if not self.isRunning():
+            self.start()
         
-    def stop(self):
-        self.timer.stop()
+    def stop_detection(self):
+        self.is_running = False
+        self.wait()  # Wait for thread loop to exit safely
         
-    def scan_all(self):
-        for name, slot in self.slots.items():
+    def run(self):
+        self.is_running = True
+        # Create mss instance inside the run loop (QThread local) to avoid cross-thread context issues
+        with mss.mss() as sct:
+            while self.is_running:
+                loop_start = time.time()
+                self.scan_all(sct)
+                
+                # Dynamic sleep calculation to keep precise tick rate
+                elapsed = time.time() - loop_start
+                sleep_time = max(0.01, self.scan_interval - elapsed)
+                time.sleep(sleep_time)
+                
+    def scan_all(self, sct):
+        for name, slot in list(self.slots.items()):
             if slot.rect is None or slot.template is None:
                 continue
                 
             try:
-                # Capture target rect
-                # slot.rect can be QRect or (x, y, w, h)
                 if isinstance(slot.rect, QRect):
                     x, y, w, h = slot.rect.x(), slot.rect.y(), slot.rect.width(), slot.rect.height()
                 else:
                     x, y, w, h = slot.rect
                     
                 monitor = {"top": y, "left": x, "width": w, "height": h}
-                sct_img = self.sct.grab(monitor)
+                sct_img = sct.grab(monitor)
                 
-                # Convert grab to grayscale numpy array
-                captured_rgb = np.array(sct_img)[:, :, :3]  # drop alpha channel
+                captured_rgb = np.array(sct_img)[:, :, :3]
                 captured_gray = cv2.cvtColor(captured_rgb, cv2.COLOR_RGB2GRAY)
                 
-                # Check template dimensions match captured dimensions
-                # In template matching, template size must be <= search image size
-                # Usually they should match exactly since we capture the exact same rect
                 th, tw = slot.template.shape[:2]
                 ch, cw = captured_gray.shape[:2]
                 
-                # Resize if sizes are slightly different to ensure template match executes smoothly
                 if th != ch or tw != cw:
                     captured_gray = cv2.resize(captured_gray, (tw, th))
                 
-                # Run template matching (Normalized Cross-Correlation)
                 res = cv2.matchTemplate(captured_gray, slot.template, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, _ = cv2.minMaxLoc(res)
                 
                 slot.last_similarity = max_val
                 
-                # Determine state transitions (Edge Triggering)
                 new_ready = max_val >= slot.threshold
                 if new_ready != slot.is_ready:
                     slot.is_ready = new_ready
                     self.state_changed.emit(name, new_ready, max_val)
                     
-            except Exception as e:
-                # Silently catch grab issues if dimensions or positions are invalid during setup
+            except Exception:
                 pass
