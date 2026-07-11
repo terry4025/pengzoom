@@ -1283,6 +1283,8 @@ class MagnifierWindow(QMainWindow):
         
         self.ctrl_pressed = False
         self.alt_pressed = False
+        self.last_mbutton_pressed = False
+        self.is_settings_open = False
         
         self.start_listeners()
         
@@ -1308,42 +1310,20 @@ class MagnifierWindow(QMainWindow):
         self.opacity_slider.setValue(self.opacity_value)
         self.setWindowOpacity(self.opacity_value / 100.0)
 
-    # Removed QMouseListener completely to prevent initial loading lag (Option 2 applied!)
-    # Resurrected on_click ONLY to support Ctrl+MiddleClick without mouse movement lag!
     def start_listeners(self):
         try:
             self.key_listener = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
             self.key_listener.start()
         except Exception:
             pass
-        try:
-            self.mouse_listener = mouse.Listener(on_click=self.on_mouse_click)
-            self.mouse_listener.start()
-        except Exception:
-            pass
 
     def pause_listeners(self):
-        try:
-            if hasattr(self, 'key_listener') and self.key_listener:
-                self.key_listener.stop()
-        except Exception:
-            pass
-        try:
-            if hasattr(self, 'mouse_listener') and self.mouse_listener:
-                self.mouse_listener.stop()
-        except Exception:
-            pass
+        # We don't recreate listeners anymore, preventing PySide/PyQt cross-thread crashes!
+        pass
 
     def resume_listeners(self):
-        self.pause_listeners()
-        self.start_listeners()
-
-    def on_mouse_click(self, x, y, button, pressed):
-        if pressed and str(button) == "Button.middle":
-            # Realtime Ctrl key check using Win32 API to prevent state locking issues
-            is_ctrl = ctypes.windll.user32.GetKeyState(0x11) < 0
-            if is_ctrl and self.hotkey_follow == "Ctrl+MiddleClick":
-                self.bridge.toggle_follow.emit()
+        # We don't recreate listeners anymore, preventing PySide/PyQt cross-thread crashes!
+        pass
 
     # Capture wheel events on top of the magnifier screen when window is focused
     def wheelEvent(self, event: QWheelEvent):
@@ -1756,21 +1736,24 @@ class MagnifierWindow(QMainWindow):
             self.move(global_pos.x() - offset_x, global_pos.y() - offset_y)
 
     def start_selection(self):
-        self.pause_listeners()
+        self.is_settings_open = True
         self.selection_overlay = SelectionOverlay()
         self.selection_overlay.areaSelected.connect(self.on_area_selected)
-        self.selection_overlay.closed.connect(self.resume_listeners)
+        self.selection_overlay.closed.connect(self.restore_settings_open_state)
         self.selection_overlay.show()
 
     def start_cooldown_area_capture(self, skill_name, config_dialog):
         self.cooldown_capture_name = skill_name
         self.config_dialog_ref = config_dialog
         
-        self.pause_listeners()
+        self.is_settings_open = True
         self.overlay = SelectionOverlay()
         self.overlay.areaSelected.connect(self.on_cooldown_area_captured)
-        self.overlay.closed.connect(self.resume_listeners)
+        self.overlay.closed.connect(self.restore_settings_open_state)
         self.overlay.show()
+
+    def restore_settings_open_state(self):
+        self.is_settings_open = hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible()
 
     def on_cooldown_area_captured(self, rect):
         try:
@@ -1844,6 +1827,7 @@ class MagnifierWindow(QMainWindow):
         self.client_running = False
 
     def on_area_selected(self, rect):
+        self.is_settings_open = False
         self.follow_mouse = False
         self.follow_btn.setText('따라오기: 끔')
         self.follow_btn.setProperty("class", "")
@@ -1917,27 +1901,43 @@ class MagnifierWindow(QMainWindow):
 
     def show_settings(self):
         try:
-            self.pause_listeners()
+            self.is_settings_open = True
             dialog = SettingsModal(self)
             dialog.exec()
-            self.resume_listeners()
+            self.is_settings_open = False
         except Exception as e:
+            self.is_settings_open = False
             err_msg = f"설정 창 실행 중 예외가 발생했습니다:\n{str(e)}\n\n{traceback.format_exc()}"
             show_dark_message_box(self, "설정 오류", err_msg, QMessageBox.Icon.Critical)
-            self.resume_listeners()
 
     def show_help(self):
         try:
-            self.pause_listeners()
+            self.is_settings_open = True
             dialog = HelpModal(self)
             dialog.exec()
-            self.resume_listeners()
+            self.is_settings_open = False
         except Exception as e:
+            self.is_settings_open = False
             err_msg = f"도움말 창 실행 중 예외가 발생했습니다:\n{str(e)}\n\n{traceback.format_exc()}"
             show_dark_message_box(self, "도움말 오류", err_msg, QMessageBox.Icon.Critical)
-            self.resume_listeners()
 
     def update_magnifier(self):
+        try:
+            # 1. 렉 없는 마우스 휠 클릭 감지 (WH_MOUSE_LL 훅 미사용)
+            # VK_MBUTTON = 0x04
+            curr_mbutton = ctypes.windll.user32.GetKeyState(0x04) < 0
+            
+            # 마우스 미들 버튼이 이번 프레임에 막 눌린 경우 (Edge Trigger)
+            if curr_mbutton and not self.last_mbutton_pressed:
+                if not self.is_settings_open and not self.is_setting_hotkey:
+                    is_ctrl = ctypes.windll.user32.GetKeyState(0x11) < 0
+                    if is_ctrl and self.hotkey_follow == "Ctrl+MiddleClick":
+                        self.bridge.toggle_follow.emit()
+            
+            self.last_mbutton_pressed = curr_mbutton
+        except Exception:
+            pass
+
         try:
             if self.follow_mouse:
                 cursor_pos = QCursor.pos()
@@ -2032,6 +2032,9 @@ class MagnifierWindow(QMainWindow):
         return False
 
     def on_key_press(self, key):
+        if self.is_settings_open or self.is_setting_hotkey:
+            return
+            
         if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
             self.ctrl_pressed = True
         elif key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
