@@ -2063,13 +2063,13 @@ class MagnifierWindow(QMainWindow):
         if self.hotkey_hide:
             parts = [p.lower() for p in self.hotkey_hide.split('+')]
             if self.check_hotkey_match(parts, current_key_name):
-                self.bridge.toggle_hide.emit()
+                self.bridge.toggle_hide_ui.emit()
                 return
 
         if self.hotkey_follow:
             parts = [p.lower() for p in self.hotkey_follow.split('+')]
             if self.check_hotkey_match(parts, current_key_name):
-                self.bridge.toggle_follow.emit()
+                self.bridge.toggle_follow_mouse.emit()
                 return
 
     def on_key_release(self, key):
