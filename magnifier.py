@@ -261,6 +261,10 @@ def show_dark_message_box(parent, title, text, icon_type=QMessageBox.Icon.Inform
     if main_win and hasattr(main_win, 'resume_listeners'):
         main_win.resume_listeners()
         
+        # Bring parent window explicitly back on top after dialog close
+        parent.raise_()
+        parent.activateWindow()
+        
     return result
 
 def get_dark_input_text(parent, title, label_text):
@@ -310,6 +314,10 @@ def get_dark_input_text(parent, title, label_text):
     
     if main_win and hasattr(main_win, 'resume_listeners'):
         main_win.resume_listeners()
+        
+        # Bring parent window explicitly back on top after input dialog close
+        parent.raise_()
+        parent.activateWindow()
         
     return val, ok
 
@@ -702,9 +710,12 @@ class SettingsModal(QDialog):
         
         host_title_lay = QHBoxLayout()
         host_title_lay.setSpacing(6)
+        
+        # SVG icon rendering fixes for Host and Join labels
         host_icon = QLabel()
         host_icon.setFixedSize(18, 18)
-        # Use new custom pixmap logic to guarantee Lucide icons render fully without cutoff
+        # Apply strict CSS reset to bypass QFrame inheritance border-radius clipping (Solves cut off issue!)
+        host_icon.setStyleSheet("border: none; background: transparent; border-radius: 0px; padding: 0px;")
         host_icon.setPixmap(get_svg_pixmap(LUCIDE_HOST_SVG, 18))
         
         host_lbl = QLabel("<b>중계 방 만들기 (Host)</b>")
@@ -754,9 +765,11 @@ class SettingsModal(QDialog):
         
         guest_title_lay = QHBoxLayout()
         guest_title_lay.setSpacing(6)
+        
         guest_icon = QLabel()
         guest_icon.setFixedSize(18, 18)
-        # Use new custom pixmap logic to guarantee Lucide icons render fully without cutoff
+        # Apply strict CSS reset to bypass QFrame inheritance border-radius clipping (Solves cut off issue!)
+        guest_icon.setStyleSheet("border: none; background: transparent; border-radius: 0px; padding: 0px;")
         guest_icon.setPixmap(get_svg_pixmap(LUCIDE_JOIN_SVG, 18))
         
         guest_lbl = QLabel("<b>대기실 접속하기 (Join)</b>")
