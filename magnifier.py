@@ -12,11 +12,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout,
                              QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
                              QCheckBox)
 from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject
-from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence
+from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence, QWheelEvent
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
 from PIL import Image
-from pynput import mouse, keyboard
+from pynput import keyboard
 
 # Import our custom modules
 import cooldown_detector
@@ -1131,19 +1131,16 @@ class MagnifierWindow(QMainWindow):
         self.opacity_slider.setValue(self.opacity_value)
         self.setWindowOpacity(self.opacity_value / 100.0)
 
+    # Removed QMouseListener completely to prevent initial loading lag (Option 2 applied!)
     def start_listeners(self):
         try:
-            self.mouse_listener = mouse.Listener(on_click=self.on_global_click, on_scroll=self.on_global_scroll)
             self.key_listener = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
-            self.mouse_listener.start()
             self.key_listener.start()
         except Exception:
             pass
 
     def pause_listeners(self):
         try:
-            if hasattr(self, 'mouse_listener') and self.mouse_listener:
-                self.mouse_listener.stop()
             if hasattr(self, 'key_listener') and self.key_listener:
                 self.key_listener.stop()
         except Exception:
@@ -1152,6 +1149,19 @@ class MagnifierWindow(QMainWindow):
     def resume_listeners(self):
         self.pause_listeners()
         self.start_listeners()
+
+    # Capture wheel events on top of the magnifier screen when window is focused
+    def wheelEvent(self, event: QWheelEvent):
+        # Adjust zoom when Ctrl key is pressed
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            angle = event.angleDelta().y()
+            if angle > 0:
+                self.handle_global_zoom(1)
+            elif angle < 0:
+                self.handle_global_zoom(-1)
+            event.accept()
+        else:
+            super().wheelEvent(event)
 
     def showEvent(self, event):
         force_set_window_icon(int(self.winId()))
@@ -1736,17 +1746,6 @@ class MagnifierWindow(QMainWindow):
             self.ctrl_pressed = False
         elif key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
             self.alt_pressed = False
-
-    def on_global_scroll(self, x, y, dx, dy):
-        if self.ctrl_pressed:
-            self.bridge.zoom_changed.emit(1 if dy > 0 else -1)
-
-    def on_global_click(self, x, y, button, pressed):
-        if not pressed:
-            return
-        if self.hotkey_follow is None:
-            if button == mouse.Button.middle and self.ctrl_pressed:
-                self.bridge.toggle_follow.emit()
 
     def handle_global_zoom(self, direction):
         if direction > 0:
