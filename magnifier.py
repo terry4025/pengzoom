@@ -4,6 +4,7 @@ import json
 import mss
 import numpy as np
 import winsound  # Win32 system sound for cooldown alerts
+import threading  # Asynchronous threading to prevent mouse lagging
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, 
                              QHBoxLayout, QWidget, QFrame, QPushButton, QSlider, 
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
@@ -177,13 +178,26 @@ def force_set_window_icon(hwnd):
     except Exception:
         pass
 
-# Custom Styled Dialogs to solve visibility (dark mode contrast) issues 100%
+# Utility to traverse hierarchy and get the main window to call pause/resume on listeners
+def get_main_window_instance(parent):
+    if parent:
+        curr = parent
+        while curr:
+            if isinstance(curr, QMainWindow):
+                return curr
+            curr = curr.parent()
+    return None
+
+# Custom Styled Dialogs with Listener Pausing to 100% prevent 1fps mouse lagging during modal blocking
 def show_dark_message_box(parent, title, text, icon_type=QMessageBox.Icon.Information):
+    main_win = get_main_window_instance(parent)
+    if main_win and hasattr(main_win, 'pause_listeners'):
+        main_win.pause_listeners()
+        
     msg = QMessageBox(parent)
     msg.setWindowTitle(title)
     msg.setText(text)
     msg.setIcon(icon_type)
-    # Set window flags to show proper title bar
     msg.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowCloseButtonHint)
     msg.setStyleSheet("""
         QMessageBox {
@@ -210,9 +224,18 @@ def show_dark_message_box(parent, title, text, icon_type=QMessageBox.Icon.Inform
             background-color: rgba(255, 255, 255, 0.16);
         }
     """)
-    return msg.exec()
+    result = msg.exec()
+    
+    if main_win and hasattr(main_win, 'resume_listeners'):
+        main_win.resume_listeners()
+        
+    return result
 
 def get_dark_input_text(parent, title, label_text):
+    main_win = get_main_window_instance(parent)
+    if main_win and hasattr(main_win, 'pause_listeners'):
+        main_win.pause_listeners()
+        
     dialog = QInputDialog(parent)
     dialog.setWindowTitle(title)
     dialog.setLabelText(label_text)
@@ -251,7 +274,12 @@ def get_dark_input_text(parent, title, label_text):
         }
     """)
     ok = dialog.exec()
-    return dialog.textValue(), ok
+    val = dialog.textValue()
+    
+    if main_win and hasattr(main_win, 'resume_listeners'):
+        main_win.resume_listeners()
+        
+    return val, ok
 
 
 class InputBridge(QObject):
@@ -310,14 +338,12 @@ class PartyPanel(QWidget):
         self.widgets = {}
 
     def update_states(self, party_states):
-        # Clear removed players
         current_players = set(party_states.keys())
         for p in list(self.widgets.keys()):
             if p not in current_players:
                 self.widgets[p]["widget"].deleteLater()
                 del self.widgets[p]
                 
-        # Update or add players
         for player, skills in party_states.items():
             if player not in self.widgets:
                 player_widget = QFrame()
@@ -342,13 +368,11 @@ class PartyPanel(QWidget):
                 
             p_data = self.widgets[player]
             
-            # Clear obsolete skill labels
             for s in list(p_data["labels"].keys()):
                 if s not in skills:
                     p_data["labels"][s].deleteLater()
                     del p_data["labels"][s]
                     
-            # Set skill labels
             for skill, s_info in skills.items():
                 is_ready = s_info.get("is_ready", True)
                 if skill not in p_data["labels"]:
@@ -525,7 +549,7 @@ class SettingsModal(QDialog):
         # 1. Follow Hotkey
         lbl_follow = QLabel("마우스 따라오기:")
         lbl_follow.setStyleSheet("font-size: 13px; color: #cccccc;")
-        self.btn_follow = QPushButton(self.get_display_text(self.temp_follow, "Ctrl+MiddleClick"))
+        self.btn_follow = QPushButton(self.parent_window.get_display_text(self.temp_follow, "Ctrl+MiddleClick"))
         self.btn_follow.clicked.connect(lambda: self.start_setting("follow", self.btn_follow))
         grid.addWidget(lbl_follow, 0, 0)
         grid.addWidget(self.btn_follow, 0, 1)
@@ -533,7 +557,7 @@ class SettingsModal(QDialog):
         # 2. Transparent (Click-through) Hotkey
         lbl_trans = QLabel("마우스 투과 토글:")
         lbl_trans.setStyleSheet("font-size: 13px; color: #cccccc;")
-        self.btn_transparent = QPushButton(self.get_display_text(self.temp_transparent, "Ctrl+Alt+T"))
+        self.btn_transparent = QPushButton(self.parent_window.get_display_text(self.temp_transparent, "Ctrl+Alt+T"))
         self.btn_transparent.clicked.connect(lambda: self.start_setting("transparent", self.btn_transparent))
         grid.addWidget(lbl_trans, 1, 0)
         grid.addWidget(self.btn_transparent, 1, 1)
@@ -541,7 +565,7 @@ class SettingsModal(QDialog):
         # 3. Minimize Window Hotkey
         lbl_hide = QLabel("최소화(가리기) 토글:")
         lbl_hide.setStyleSheet("font-size: 13px; color: #cccccc;")
-        self.btn_hide = QPushButton(self.get_display_text(self.temp_hide, "Ctrl+Alt+H"))
+        self.btn_hide = QPushButton(self.parent_window.get_display_text(self.temp_hide, "Ctrl+Alt+H"))
         self.btn_hide.clicked.connect(lambda: self.start_setting("hide", self.btn_hide))
         grid.addWidget(lbl_hide, 2, 0)
         grid.addWidget(self.btn_hide, 2, 1)
@@ -565,6 +589,14 @@ class SettingsModal(QDialog):
         info.setWordWrap(True)
         lay.addWidget(info)
         lay.addStretch()
+
+    def get_display_text(self, val, fallback):
+        return val if val else fallback
+
+    def start_setting(self, target, button):
+        self.is_setting_target = target
+        button.setText("키 입력 대기 중...")
+        button.setStyleSheet("background-color: rgba(0, 102, 204, 0.4); border-color: #0066cc;")
 
     def setup_skills_tab(self, tab):
         lay = QVBoxLayout(tab)
@@ -1056,7 +1088,7 @@ class MagnifierWindow(QMainWindow):
         # Initialize detector
         self.detector = cooldown_detector.CooldownDetector()
         self.detector.state_changed.connect(self.on_skill_state_changed)
-        self.detector.start(250)  # Scan every 250ms
+        self.detector.start_detection(250)  # Scan every 250ms (runs inside background QThread)
         
         # Network objects
         self.server = None
@@ -1079,10 +1111,7 @@ class MagnifierWindow(QMainWindow):
         self.ctrl_pressed = False
         self.alt_pressed = False
         
-        self.mouse_listener = mouse.Listener(on_click=self.on_global_click, on_scroll=self.on_global_scroll)
-        self.key_listener = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
-        self.mouse_listener.start()
-        self.key_listener.start()
+        self.start_listeners()
         
         self.setup_ui()
         
@@ -1100,6 +1129,28 @@ class MagnifierWindow(QMainWindow):
         self.zoom_slider.setValue(int(self.zoom_factor * 10))
         self.opacity_slider.setValue(self.opacity_value)
         self.setWindowOpacity(self.opacity_value / 100.0)
+
+    def start_listeners(self):
+        try:
+            self.mouse_listener = mouse.Listener(on_click=self.on_global_click, on_scroll=self.on_global_scroll)
+            self.key_listener = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
+            self.mouse_listener.start()
+            self.key_listener.start()
+        except Exception:
+            pass
+
+    def pause_listeners(self):
+        try:
+            if hasattr(self, 'mouse_listener') and self.mouse_listener:
+                self.mouse_listener.stop()
+            if hasattr(self, 'key_listener') and self.key_listener:
+                self.key_listener.stop()
+        except Exception:
+            pass
+
+    def resume_listeners(self):
+        self.pause_listeners()
+        self.start_listeners()
 
     def showEvent(self, event):
         force_set_window_icon(int(self.winId()))
@@ -1375,11 +1426,22 @@ class MagnifierWindow(QMainWindow):
         self.top_control_widget.setVisible(not should_hide)
         self.bottom_control_widget.setVisible(not should_hide)
 
+    def start_selection(self):
+        self.pause_listeners()
+        self.selection_overlay = SelectionOverlay()
+        self.selection_overlay.areaSelected.connect(self.on_area_selected)
+        # Re-enable global mouse hook listeners after selection area layout is finalized or closed
+        self.selection_overlay.destroyed.connect(self.resume_listeners)
+        self.selection_overlay.show()
+
     def start_cooldown_area_capture(self, skill_name, config_dialog):
         self.cooldown_capture_name = skill_name
         self.config_dialog_ref = config_dialog
+        
+        self.pause_listeners()
         self.overlay = SelectionOverlay()
         self.overlay.areaSelected.connect(self.on_cooldown_area_captured)
+        self.overlay.destroyed.connect(self.resume_listeners)
         self.overlay.show()
 
     def on_cooldown_area_captured(self, rect):
@@ -1402,8 +1464,10 @@ class MagnifierWindow(QMainWindow):
 
     def on_skill_state_changed(self, name, is_ready, similarity):
         if is_ready:
-            # 1000 Hz, 250 ms beep sound on Cooldown Recovery
-            winsound.Beep(1000, 250)
+            # Play beep sound asynchronously in background thread to prevent GUI/mouse thread blocking (fixes 1fps issue!)
+            def play_beep():
+                winsound.Beep(1000, 250)
+            threading.Thread(target=play_beep, daemon=True).start()
             
         # Send update to party server if active
         if self.client_running and self.client:
@@ -1504,6 +1568,18 @@ class MagnifierWindow(QMainWindow):
         self.setWindowOpacity(opacity)
         self.opacity_val_label.setText(f'{value}%')
 
+    def show_settings(self):
+        self.pause_listeners()
+        dialog = SettingsModal(self)
+        dialog.exec()
+        self.resume_listeners()
+
+    def show_help(self):
+        self.pause_listeners()
+        dialog = HelpModal(self)
+        dialog.exec()
+        self.resume_listeners()
+
     def update_magnifier(self):
         try:
             if self.follow_mouse:
@@ -1549,6 +1625,9 @@ class MagnifierWindow(QMainWindow):
             self.label.setPixmap(pixmap)
         except Exception:
             pass
+
+    def get_display_text(self, val, fallback):
+        return val if val else fallback
 
     def check_hotkey_match(self, parsed_parts, current_key_name, is_t_key, is_h_key):
         target_key = parsed_parts[-1].lower()
@@ -1662,12 +1741,11 @@ class MagnifierWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.save_settings()
-        self.detector.stop()
+        self.detector.stop_detection()
         self.stop_party_server()
         self.stop_party_client()
         self.party_panel.close()
-        self.mouse_listener.stop()
-        self.key_listener.stop()
+        self.pause_listeners()
         super().closeEvent(event)
 
 if __name__ == '__main__':
