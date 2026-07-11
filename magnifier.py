@@ -2082,6 +2082,7 @@ class MagnifierWindow(QMainWindow):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     
     # Set global app icon directly from built-in high quality original penguin SVG
     try:
