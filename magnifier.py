@@ -7,7 +7,8 @@ import winsound  # Win32 system sound for cooldown alerts
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, 
                              QHBoxLayout, QWidget, QFrame, QPushButton, QSlider, 
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
-                             QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox)
+                             QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
+                             QCheckBox)
 from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject
 from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence
 from PyQt6.QtSvg import QSvgRenderer
@@ -176,6 +177,83 @@ def force_set_window_icon(hwnd):
     except Exception:
         pass
 
+# Custom Styled Dialogs to solve visibility (dark mode contrast) issues 100%
+def show_dark_message_box(parent, title, text, icon_type=QMessageBox.Icon.Information):
+    msg = QMessageBox(parent)
+    msg.setWindowTitle(title)
+    msg.setText(text)
+    msg.setIcon(icon_type)
+    # Set window flags to show proper title bar
+    msg.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowCloseButtonHint)
+    msg.setStyleSheet("""
+        QMessageBox {
+            background-color: #1c1c1e;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+        }
+        QLabel {
+            color: #ffffff;
+            font-size: 13px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            padding: 4px;
+        }
+        QPushButton {
+            background-color: rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 5px 15px;
+            min-width: 65px;
+            font-size: 12px;
+        }
+        QPushButton:hover {
+            background-color: rgba(255, 255, 255, 0.16);
+        }
+    """)
+    return msg.exec()
+
+def get_dark_input_text(parent, title, label_text):
+    dialog = QInputDialog(parent)
+    dialog.setWindowTitle(title)
+    dialog.setLabelText(label_text)
+    dialog.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowCloseButtonHint)
+    dialog.setStyleSheet("""
+        QInputDialog {
+            background-color: #1c1c1e;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+        }
+        QLabel {
+            color: #ffffff;
+            font-size: 13px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            padding: 4px;
+        }
+        QLineEdit {
+            background-color: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            color: #ffffff;
+            padding: 5px 8px;
+            font-size: 12px;
+        }
+        QPushButton {
+            background-color: rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 5px 15px;
+            min-width: 65px;
+            font-size: 12px;
+        }
+        QPushButton:hover {
+            background-color: rgba(255, 255, 255, 0.16);
+        }
+    """)
+    ok = dialog.exec()
+    return dialog.textValue(), ok
+
+
 class InputBridge(QObject):
     zoom_changed = pyqtSignal(int)
     toggle_follow = pyqtSignal()
@@ -343,6 +421,10 @@ class SettingsModal(QDialog):
                 padding: 4px 8px;
                 font-size: 12px;
             }
+            QCheckBox {
+                color: #ffffff;
+                font-size: 12px;
+            }
             QTabWidget::pane {
                 border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 8px;
@@ -396,10 +478,10 @@ class SettingsModal(QDialog):
         # Tab Control
         self.tabs = QTabWidget()
         
-        # Tab 1: General Hotkeys
+        # Tab 1: General Hotkeys & Display settings
         tab_hotkeys = QWidget()
         self.setup_hotkeys_tab(tab_hotkeys)
-        self.tabs.addTab(tab_hotkeys, "단축키")
+        self.tabs.addTab(tab_hotkeys, "단축키/표시")
         
         # Tab 2: Skill Cooldown Settings
         tab_skills = QWidget()
@@ -425,7 +507,7 @@ class SettingsModal(QDialog):
         container_layout.addLayout(btn_layout)
         layout.addWidget(container)
         
-        self.resize(460, 440)
+        self.resize(460, 460)
         self.old_pos = None
 
     def setup_hotkeys_tab(self, tab):
@@ -466,8 +548,20 @@ class SettingsModal(QDialog):
         
         lay.addLayout(grid)
         
-        info = QLabel("※ 단축키 지정 대기 상태에서 ESC를 누르면 마우스 기본 설정(휠 클릭 리셋 등)으로 해제 처리됩니다.")
-        info.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.4);")
+        # Divider Line
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        line.setStyleSheet("background-color: rgba(255,255,255,0.06);")
+        lay.addWidget(line)
+        
+        # UI Hiding Toggle Option (Newly Requested Feature)
+        self.chk_hide_ui_on_transparent = QCheckBox("마우스 투과(On) 시 모든 제어 UI 숨기기")
+        self.chk_hide_ui_on_transparent.setChecked(self.parent_window.hide_ui_on_transparent)
+        lay.addWidget(self.chk_hide_ui_on_transparent)
+        
+        info = QLabel("※ 단축키 지정 대기 상태에서 ESC를 누르면 마우스 기본 설정(휠 클릭 리셋 등)으로 해제 처리됩니다. 투과 UI 숨기기 옵션을 켜면, 마우스 투과 상태에서 버튼과 슬라이더 영역이 자동 가려져 깔끔한 화면만 떠있게 됩니다.")
+        info.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.4); line-height: 1.4;")
         info.setWordWrap(True)
         lay.addWidget(info)
         lay.addStretch()
@@ -572,18 +666,6 @@ class SettingsModal(QDialog):
         self.update_network_tab_texts()
         lay.addStretch()
 
-    def get_display_text(self, value, default_text):
-        return value if value else default_text
-
-    def start_setting(self, target, button):
-        self.is_setting_target = target
-        self.btn_follow.setStyleSheet("")
-        self.btn_transparent.setStyleSheet("")
-        self.btn_hide.setStyleSheet("")
-        
-        button.setText("키 입력 대기 중...")
-        button.setStyleSheet("background-color: rgba(255, 214, 10, 0.2); color: #ffd60a; border: 1px solid rgba(255, 214, 10, 0.4);")
-
     # Skill Logic
     def refresh_skill_list(self):
         self.skill_list.clear()
@@ -591,11 +673,11 @@ class SettingsModal(QDialog):
             self.skill_list.addItem(name)
 
     def add_new_skill_slot(self):
-        name, ok = QInputDialog.getText(self, "스킬 추가", "감지할 스킬 이름을 입력하세요:")
+        name, ok = get_dark_input_text(self, "스킬 추가", "감지할 스킬 이름을 입력하세요:")
         if ok and name.strip():
             name = name.strip()
             if name in self.parent_window.detector.slots:
-                QMessageBox.warning(self, "오류", "이미 존재하는 스킬명입니다.")
+                show_dark_message_box(self, "오류", "이미 존재하는 스킬명입니다.", QMessageBox.Icon.Warning)
                 return
             self.parent_window.detector.add_slot(name, None)
             self.refresh_skill_list()
@@ -611,7 +693,7 @@ class SettingsModal(QDialog):
     def capture_selected_skill_area(self):
         curr = self.skill_list.currentItem()
         if not curr:
-            QMessageBox.warning(self, "선택 필요", "영역을 지정할 스킬을 목록에서 먼저 선택하세요.")
+            show_dark_message_box(self, "선택 필요", "영역을 지정할 스킬을 목록에서 먼저 선택하세요.", QMessageBox.Icon.Warning)
             return
             
         self.hide()  # Hide modal momentarily
@@ -667,7 +749,7 @@ class SettingsModal(QDialog):
         url = self.txt_host_url.text().strip()
         
         if not char_name:
-            QMessageBox.warning(self, "이름 필요", "캐릭터명을 정확하게 기입하세요.")
+            show_dark_message_box(self, "이름 필요", "캐릭터명을 정확하게 기입하세요.", QMessageBox.Icon.Warning)
             return
             
         self.parent_window.player_name = char_name
@@ -694,6 +776,10 @@ class SettingsModal(QDialog):
         
         self.parent_window.player_name = self.txt_char_name.text().strip()
         self.parent_window.server_url = self.txt_host_url.text().strip()
+        self.parent_window.hide_ui_on_transparent = self.chk_hide_ui_on_transparent.isChecked()
+        
+        # Apply updated ui hiding right away
+        self.parent_window.update_ui_visibility()
         self.accept()
 
     def keyPressEvent(self, event):
@@ -965,6 +1051,7 @@ class MagnifierWindow(QMainWindow):
         # Player states and settings
         self.player_name = "플레이어"
         self.server_url = "http://127.0.0.1:9090"
+        self.hide_ui_on_transparent = False  # Feature Toggle
         
         # Initialize detector
         self.detector = cooldown_detector.CooldownDetector()
@@ -1051,6 +1138,7 @@ class MagnifierWindow(QMainWindow):
                     
                     self.player_name = data.get('player_name', "플레이어")
                     self.server_url = data.get('server_url', "http://127.0.0.1:9090")
+                    self.hide_ui_on_transparent = data.get('hide_ui_on_transparent', False)
                     return
             except Exception:
                 pass
@@ -1071,7 +1159,8 @@ class MagnifierWindow(QMainWindow):
                 'hotkey_transparent': self.hotkey_transparent,
                 'hotkey_hide': self.hotkey_hide,
                 'player_name': self.player_name,
-                'server_url': self.server_url
+                'server_url': self.server_url,
+                'hide_ui_on_transparent': self.hide_ui_on_transparent
             }
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
@@ -1173,63 +1262,54 @@ class MagnifierWindow(QMainWindow):
         self.main_layout.setContentsMargins(16, 16, 16, 16)
         self.main_layout.setSpacing(12)
         
-        # Title/Controls Bar
-        self.title_layout = QHBoxLayout()
-        self.title_layout.setSpacing(8)
+        # 1. Top Control Bar (packaged inside a container QWidget for toggle control)
+        self.top_control_widget = QWidget()
+        top_bar_layout = QHBoxLayout(self.top_control_widget)
+        top_bar_layout.setContentsMargins(0, 0, 0, 0)
+        top_bar_layout.setSpacing(8)
         
         self.select_btn = QPushButton('영역 지정')
         self.select_btn.clicked.connect(self.start_selection)
-        self.title_layout.addWidget(self.select_btn)
+        top_bar_layout.addWidget(self.select_btn)
         
         self.follow_btn = QPushButton('따라오기: 켬')
         self.follow_btn.setProperty("class", "PrimaryActive")
         self.follow_btn.clicked.connect(self.toggle_follow)
-        self.title_layout.addWidget(self.follow_btn)
+        top_bar_layout.addWidget(self.follow_btn)
         
-        self.title_layout.addStretch()
+        top_bar_layout.addStretch()
         
-        # Top-right button cluster (Minimize, Settings, Help, Close) all as 24x24 circular buttons with Lucide SVGs
         self.minimize_btn = QPushButton()
         self.minimize_btn.setObjectName('MinimizeBtn')
         self.minimize_btn.setFixedSize(24, 24)
         self.minimize_btn.setIcon(get_svg_icon(LUCIDE_MINIMIZE_SVG))
         self.minimize_btn.clicked.connect(self.showMinimized)
-        self.title_layout.addWidget(self.minimize_btn)
+        top_bar_layout.addWidget(self.minimize_btn)
         
         self.settings_btn = QPushButton()
         self.settings_btn.setObjectName('SettingsBtn')
         self.settings_btn.setFixedSize(24, 24)
         self.settings_btn.setIcon(get_svg_icon(LUCIDE_SETTINGS_SVG))
         self.settings_btn.clicked.connect(self.show_settings)
-        self.title_layout.addWidget(self.settings_btn)
+        top_bar_layout.addWidget(self.settings_btn)
         
         self.help_btn = QPushButton()
         self.help_btn.setObjectName('HelpBtn')
         self.help_btn.setFixedSize(24, 24)
         self.help_btn.setIcon(get_svg_icon(LUCIDE_HELP_SVG))
         self.help_btn.clicked.connect(self.show_help)
-        self.title_layout.addWidget(self.help_btn)
+        top_bar_layout.addWidget(self.help_btn)
         
         self.close_btn = QPushButton()
         self.close_btn.setObjectName('CloseBtn')
         self.close_btn.setFixedSize(24, 24)
         self.close_btn.setIcon(get_svg_icon(LUCIDE_CLOSE_SVG))
         self.close_btn.clicked.connect(self.close)
-        self.title_layout.addWidget(self.close_btn)
+        top_bar_layout.addWidget(self.close_btn)
         
-        self.main_layout.addLayout(self.title_layout)
+        self.main_layout.addWidget(self.top_control_widget)
         
-        # Row for Click-Through Toggle
-        self.config_layout = QHBoxLayout()
-        self.config_layout.setSpacing(8)
-        
-        self.click_through_btn = QPushButton('마우스 투과: 끔')
-        self.click_through_btn.clicked.connect(self.toggle_click_through)
-        self.config_layout.addWidget(self.click_through_btn)
-        
-        self.main_layout.addLayout(self.config_layout)
-        
-        # Live Magnifier Display Screen
+        # 2. Live Magnifier Display Screen (Always visible)
         self.label = QLabel()
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setStyleSheet('border-radius: 12px; background-color: #000000; border: 1px solid rgba(255, 255, 255, 0.1);')
@@ -1237,60 +1317,63 @@ class MagnifierWindow(QMainWindow):
         self.label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.main_layout.addWidget(self.label)
         
-        # Controls Group Layout (Zoom & Opacity Sliders)
-        self.sliders_layout = QVBoxLayout()
-        self.sliders_layout.setSpacing(10)
+        # 3. Bottom Control Bar (packaged inside a container QWidget for toggle control)
+        self.bottom_control_widget = QWidget()
+        bottom_bar_layout = QVBoxLayout(self.bottom_control_widget)
+        bottom_bar_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_bar_layout.setSpacing(10)
+        
+        # Row for Click-Through Toggle
+        config_layout = QHBoxLayout()
+        config_layout.setSpacing(8)
+        self.click_through_btn = QPushButton('마우스 투과: 끔')
+        self.click_through_btn.clicked.connect(self.toggle_click_through)
+        config_layout.addWidget(self.click_through_btn)
+        bottom_bar_layout.addLayout(config_layout)
         
         # Zoom Factor Slider Control
-        self.zoom_layout = QHBoxLayout()
+        zoom_layout = QHBoxLayout()
         zoom_title = QLabel('배율:')
         zoom_title.setFixedWidth(50)
-        self.zoom_layout.addWidget(zoom_title)
+        zoom_layout.addWidget(zoom_title)
         
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setRange(10, 200)
         self.zoom_slider.setValue(20)
         self.zoom_slider.valueChanged.connect(self.on_zoom_slider_changed)
-        self.zoom_layout.addWidget(self.zoom_slider)
+        zoom_layout.addWidget(self.zoom_slider)
         
         self.zoom_val_label = QLabel('2.0x')
         self.zoom_val_label.setFixedWidth(40)
         self.zoom_val_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.zoom_layout.addWidget(self.zoom_val_label)
-        self.sliders_layout.addLayout(self.zoom_layout)
+        zoom_layout.addWidget(self.zoom_val_label)
+        bottom_bar_layout.addLayout(zoom_layout)
         
         # Opacity Slider Control
-        self.opacity_layout = QHBoxLayout()
+        opacity_layout = QHBoxLayout()
         opacity_title = QLabel('투명도:')
         opacity_title.setFixedWidth(50)
-        self.opacity_layout.addWidget(opacity_title)
+        opacity_layout.addWidget(opacity_title)
         
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(15, 100)
         self.opacity_slider.setValue(100)
         self.opacity_slider.valueChanged.connect(self.on_opacity_slider_changed)
-        self.opacity_layout.addWidget(self.opacity_slider)
+        opacity_layout.addWidget(self.opacity_slider)
         
         self.opacity_val_label = QLabel('100%')
         self.opacity_val_label.setFixedWidth(40)
         self.opacity_val_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.opacity_layout.addWidget(self.opacity_val_label)
-        self.sliders_layout.addLayout(self.opacity_layout)
+        opacity_layout.addWidget(self.opacity_val_label)
+        bottom_bar_layout.addLayout(opacity_layout)
         
-        self.main_layout.addLayout(self.sliders_layout)
+        self.main_layout.addWidget(self.bottom_control_widget)
 
-    def show_settings(self):
-        modal = SettingsModal(self)
-        modal.exec()
-
-    def show_help(self):
-        modal = HelpModal(self)
-        modal.exec()
-
-    def start_selection(self):
-        self.overlay = SelectionOverlay()
-        self.overlay.areaSelected.connect(self.on_area_selected)
-        self.overlay.show()
+    # Dynamic visibility controller for minimalist HUD screen on click-through
+    def update_ui_visibility(self):
+        should_hide = self.click_through and self.hide_ui_on_transparent
+        self.top_control_widget.setVisible(not should_hide)
+        self.bottom_control_widget.setVisible(not should_hide)
 
     def start_cooldown_area_capture(self, skill_name, config_dialog):
         self.cooldown_capture_name = skill_name
@@ -1301,7 +1384,6 @@ class MagnifierWindow(QMainWindow):
 
     def on_cooldown_area_captured(self, rect):
         try:
-            # Grabs the snapshot image as reference (Ready State)
             with mss.mss() as sct:
                 x, y, w, h = rect.x(), rect.y(), rect.width(), rect.height()
                 monitor = {"top": y, "left": x, "width": w, "height": h}
@@ -1319,12 +1401,11 @@ class MagnifierWindow(QMainWindow):
             self.config_dialog_ref.refresh_skill_list()
 
     def on_skill_state_changed(self, name, is_ready, similarity):
-        # Trigger alert sound on cooldown ready (rising edge)
         if is_ready:
-            # 1000 Hz, 250 ms beep
+            # 1000 Hz, 250 ms beep sound on Cooldown Recovery
             winsound.Beep(1000, 250)
             
-        # Send update to party server if connected
+        # Send update to party server if active
         if self.client_running and self.client:
             self.client.send_update(name, is_ready)
 
@@ -1403,6 +1484,9 @@ class MagnifierWindow(QMainWindow):
         
         self.click_through_btn.style().unpolish(self.click_through_btn)
         self.click_through_btn.style().polish(self.click_through_btn)
+        
+        # Refresh UI visible state based on click-through and toggle options
+        self.update_ui_visibility()
 
     def toggle_hide_mode(self):
         if self.isMinimized():
