@@ -1119,6 +1119,11 @@ class MagnifierWindow(QMainWindow):
         
         self.start_listeners()
         
+        # Build global desktop screen coordinates rect to prevent border clipping issues
+        self.desktop_rect = QRect()
+        for screen in QApplication.screens():
+            self.desktop_rect = self.desktop_rect.united(screen.geometry())
+            
         self.setup_ui()
         
         # Apply native win32 SendMessageW to guarantee the taskbar icon displays correctly
@@ -1440,13 +1445,16 @@ class MagnifierWindow(QMainWindow):
     def update_ui_visibility(self):
         should_hide = self.click_through and self.hide_ui_on_transparent
         
-        # 1. Toggle control bar widgets
-        self.top_control_widget.setVisible(not should_hide)
-        self.bottom_control_widget.setVisible(not should_hide)
-        
-        # 2. Toggle outer ResizableContainer frame style and margins
         if should_hide:
-            # Completely transparent background, borders and hide the resize grip
+            # 1. Capture the exact dimensions self.label had before hiding layouts
+            w = max(30, self.label.width())
+            h = max(30, self.label.height())
+            
+            # 2. Toggle control bar widgets visibility
+            self.top_control_widget.setVisible(False)
+            self.bottom_control_widget.setVisible(False)
+            
+            # 3. Toggle outer ResizableContainer frame style and margins
             self.container.setStyleSheet("""
                 #MainContainer {
                     background-color: transparent;
@@ -1455,14 +1463,26 @@ class MagnifierWindow(QMainWindow):
             """)
             self.main_layout.setContentsMargins(0, 0, 0, 0)
             self.container.grip.hide()
-            # Remove live image frame border/radius to blend perfectly with background
             self.label.setStyleSheet('border-radius: 0px; background-color: #000000; border: none;')
             
-            # Allow window to scale down dynamically to ultra-small size for minimalist HUD overlay
+            # 4. Dynamically shrink window constraints down to target label size
             self.setMinimumSize(30, 30)
             self.label.setMinimumSize(30, 30)
+            self.resize(w, h)
         else:
-            # Restore round corners, outer border frame and resize grip
+            # 1. Capture dimensions self.label has right now
+            w = max(30, self.label.width())
+            h = max(30, self.label.height())
+            
+            # 2. Restore larger minimum size constraints for settings mode to prevent overlaps
+            self.setMinimumSize(250, 300)
+            self.label.setMinimumSize(100, 100)
+            
+            # 3. Toggle control bar widgets visibility
+            self.top_control_widget.setVisible(True)
+            self.bottom_control_widget.setVisible(True)
+            
+            # 4. Restore round corners, outer border frame and resize grip
             self.container.setStyleSheet("""
                 #MainContainer {
                     background-color: rgba(28, 28, 30, 0.90);
@@ -1474,9 +1494,8 @@ class MagnifierWindow(QMainWindow):
             self.container.grip.show()
             self.label.setStyleSheet('border-radius: 12px; background-color: #000000; border: 1px solid rgba(255, 255, 255, 0.1);')
             
-            # Enforce larger minimum size in settings mode to layout elements nicely
-            self.setMinimumSize(250, 300)
-            self.label.setMinimumSize(100, 100)
+            # 5. Smart resize: increase window to account for the restored control bars and padding
+            self.resize(max(420, w + 32), max(540, h + 160))
 
     def start_selection(self):
         self.pause_listeners()
@@ -1657,15 +1676,43 @@ class MagnifierWindow(QMainWindow):
             cap_w = int(view_w / self.zoom_factor)
             cap_h = int(view_h / self.zoom_factor)
             
+            # --- Border Clipping and Padding logic to prevent stride tilting / stretching ---
+            x1 = x - cap_w // 2
+            y1 = y - cap_h // 2
+            x2 = x1 + cap_w
+            y2 = y1 + cap_h
+            
+            # Clip target region dynamically to stay strictly inside the monitor boundaries
+            dx1 = max(self.desktop_rect.left(), x1)
+            dy1 = max(self.desktop_rect.top(), y1)
+            dx2 = min(self.desktop_rect.right(), x2)
+            dy2 = min(self.desktop_rect.bottom(), y2)
+            
+            dw = max(1, dx2 - dx1)
+            dh = max(1, dy2 - dy1)
+            
             monitor = {
-                'top': y - cap_h // 2, 
-                'left': x - cap_w // 2, 
-                'width': cap_w, 
-                'height': cap_h
+                'top': dy1, 
+                'left': dx1, 
+                'width': dw, 
+                'height': dh
             }
             
+            # Safe screen grab of inside-monitor boundaries
             sct_img = self.sct.grab(monitor)
-            img = Image.frombytes('RGB', sct_img.size, sct_img.bgra, 'raw', 'BGRX')
+            captured_img = Image.frombytes('RGB', sct_img.size, sct_img.bgra, 'raw', 'BGRX')
+            
+            # Padding: if original target area is partially outside, pad the rest with solid black
+            if dw < cap_w or dh < cap_h:
+                final_img = Image.new('RGB', (cap_w, cap_h), (0, 0, 0))
+                paste_x = dx1 - x1
+                paste_y = dy1 - y1
+                final_img.paste(captured_img, (paste_x, paste_y))
+                img = final_img
+            else:
+                img = captured_img
+            # ---------------------------------------------------------------------------------
+            
             img = img.resize((view_w, view_h), Image.Resampling.NEAREST)
             img = img.convert('RGBA')
             data = img.tobytes('raw', 'RGBA')
