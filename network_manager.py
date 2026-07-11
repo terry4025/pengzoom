@@ -58,14 +58,20 @@ class CooldownServer(QObject):
         if self.server_thread and self.server_thread.is_alive():
             return
             
-        config = Config(app=app, host=self.host, port=self.port, log_level="warning")
+        config = Config(app=app, host=self.host, port=self.port, log_level="warning", install_signal_handlers=False)
         self.server = Server(config=config)
         
         # Override default uvicorn server run to handle graceful shutdown safely
-        self.server_thread = threading.Thread(target=self.server.run, daemon=True)
+        self.server_thread = threading.Thread(target=self._run_server, daemon=True)
         self.server_thread.start()
         self.started.emit()
         
+    def _run_server(self):
+        try:
+            self.server.run()
+        except Exception:
+            pass
+            
     def stop(self):
         if self.server:
             self.server.should_exit = True
