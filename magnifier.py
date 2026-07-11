@@ -893,7 +893,7 @@ class SettingsModal(QDialog):
     def update_network_tab_texts(self):
         if self.parent_window.server_running:
             self.btn_toggle_server.setText("서버 중지")
-            self.lbl_server_status.setText("서버 가동 중 (포트 9090)")
+            self.lbl_server_status.setText("서버 가동 중 (포트 19090)")
             self.lbl_server_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent;")
         else:
             self.btn_toggle_server.setText("대기실 서버 가동")
@@ -1377,7 +1377,7 @@ class MagnifierWindow(QMainWindow):
         self.hotkey_transparent = "Ctrl+Alt+T"
         self.hotkey_hide = "Ctrl+Alt+H"
         self.player_name = "플레이어"
-        self.server_url = "http://127.0.0.1:9090"
+        self.server_url = "http://127.0.0.1:19090"
         self.hide_ui_on_transparent = False
         
         if os.path.exists(config_path):
@@ -1391,7 +1391,9 @@ class MagnifierWindow(QMainWindow):
                     self.hotkey_hide = data.get('hotkey_hide', "Ctrl+Alt+H")
                     
                     self.player_name = data.get('player_name', "플레이어")
-                    self.server_url = data.get('server_url', "http://127.0.0.1:9090")
+                    self.server_url = data.get('server_url', "http://127.0.0.1:19090")
+                    if ":9090" in self.server_url:
+                        self.server_url = self.server_url.replace(":9090", ":19090")
                     self.hide_ui_on_transparent = data.get('hide_ui_on_transparent', False)
                     
                     # Restore skill slots and templates (grayscale CV2 matrices) from config

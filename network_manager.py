@@ -69,7 +69,7 @@ class CooldownServer(QObject):
     started = pyqtSignal()
     stopped = pyqtSignal()
     
-    def __init__(self, host="0.0.0.0", port=9090, parent=None):
+    def __init__(self, host="0.0.0.0", port=19090, parent=None):
         super().__init__(parent)
         self.host = host
         self.port = port
@@ -116,7 +116,7 @@ class CooldownClient(QObject):
     status_updated = pyqtSignal(dict)  # Emits PARTY_STATES dictionary
     connection_failed = pyqtSignal(str)
     
-    def __init__(self, server_url="http://127.0.0.1:9090", player_name="플레이어", parent=None):
+    def __init__(self, server_url="http://127.0.0.1:19090", player_name="플레이어", parent=None):
         super().__init__(parent)
         self.server_url = server_url.rstrip("/")
         self.player_name = player_name
