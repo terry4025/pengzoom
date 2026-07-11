@@ -1925,7 +1925,7 @@ class MagnifierWindow(QMainWindow):
         try:
             # 1. 렉 없는 마우스 휠 클릭 감지 (WH_MOUSE_LL 훅 미사용)
             # VK_MBUTTON = 0x04
-            curr_mbutton = ctypes.windll.user32.GetAsyncKeyState(0x04) < 0
+            curr_mbutton = (ctypes.windll.user32.GetAsyncKeyState(0x04) & 0x8000) != 0
             
             # 마우스 미들 버튼이 이번 프레임에 막 눌린 경우 (Edge Trigger)
             if curr_mbutton and not self.last_mbutton_pressed:
@@ -1933,15 +1933,15 @@ class MagnifierWindow(QMainWindow):
                     if self.hotkey_follow:
                         lower_hotkey = self.hotkey_follow.lower()
                         if lower_hotkey == "ctrl+middleclick":
-                            is_ctrl = ctypes.windll.user32.GetAsyncKeyState(0x11) < 0
+                            is_ctrl = (ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000) != 0
                             if is_ctrl:
                                 self.bridge.toggle_follow.emit()
                         elif lower_hotkey == "shift+middleclick":
-                            is_shift = ctypes.windll.user32.GetAsyncKeyState(0x10) < 0
+                            is_shift = (ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000) != 0
                             if is_shift:
                                 self.bridge.toggle_follow.emit()
                         elif lower_hotkey == "alt+middleclick":
-                            is_alt = ctypes.windll.user32.GetAsyncKeyState(0x12) < 0
+                            is_alt = (ctypes.windll.user32.GetAsyncKeyState(0x12) & 0x8000) != 0
                             if is_alt:
                                 self.bridge.toggle_follow.emit()
                         elif lower_hotkey == "middleclick":
@@ -2030,9 +2030,9 @@ class MagnifierWindow(QMainWindow):
         req_shift = 'shift' in parsed_parts
         
         # Real-time state check using Win32 API GetAsyncKeyState to bypass focus/tracking loss
-        actual_ctrl = ctypes.windll.user32.GetAsyncKeyState(0x11) < 0
-        actual_alt = ctypes.windll.user32.GetAsyncKeyState(0x12) < 0
-        actual_shift = ctypes.windll.user32.GetAsyncKeyState(0x10) < 0
+        actual_ctrl = (ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000) != 0
+        actual_alt = (ctypes.windll.user32.GetAsyncKeyState(0x12) & 0x8000) != 0
+        actual_shift = (ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000) != 0
         
         if actual_ctrl != req_ctrl or actual_alt != req_alt or actual_shift != req_shift:
             return False
@@ -2043,47 +2043,55 @@ class MagnifierWindow(QMainWindow):
         return False
 
     def on_key_press(self, key):
-        if self.is_settings_open or self.is_setting_hotkey:
-            return
-            
         try:
-            if hasattr(key, 'char') and key.char:
-                current_key_name = key.char.lower()
-            else:
-                current_key_name = str(key).replace('Key.', '').lower()
-        except Exception:
-            current_key_name = str(key).lower()
-            
-        # Guarantee non-english layout compatibility by forced virtual key mapping (VK A-Z, 0-9)
-        if hasattr(key, 'vk') and key.vk is not None:
-            vk = key.vk
-            if 65 <= vk <= 90:
-                current_key_name = chr(vk).lower()
-            elif 96 <= vk <= 105:
-                current_key_name = str(vk - 96)
-            elif 48 <= vk <= 57:
-                current_key_name = str(vk - 48)
-            
-        if self.is_setting_hotkey:
-            return
-
-        if self.hotkey_transparent:
-            parts = [p.lower() for p in self.hotkey_transparent.split('+')]
-            if self.check_hotkey_match(parts, current_key_name):
-                self.bridge.toggle_click_through.emit()
+            if self.is_settings_open or self.is_setting_hotkey:
+                return
+                
+            try:
+                if hasattr(key, 'char') and key.char:
+                    current_key_name = key.char.lower()
+                else:
+                    current_key_name = str(key).replace('Key.', '').lower()
+            except Exception:
+                current_key_name = str(key).lower()
+                
+            # Guarantee non-english layout compatibility by forced virtual key mapping (VK A-Z, 0-9)
+            if hasattr(key, 'vk') and key.vk is not None:
+                vk = key.vk
+                if 65 <= vk <= 90:
+                    current_key_name = chr(vk).lower()
+                elif 96 <= vk <= 105:
+                    current_key_name = str(vk - 96)
+                elif 48 <= vk <= 57:
+                    current_key_name = str(vk - 48)
+                
+            if self.is_setting_hotkey:
                 return
 
-        if self.hotkey_hide:
-            parts = [p.lower() for p in self.hotkey_hide.split('+')]
-            if self.check_hotkey_match(parts, current_key_name):
-                self.bridge.toggle_hide.emit()
-                return
+            if self.hotkey_transparent:
+                parts = [p.lower() for p in self.hotkey_transparent.split('+')]
+                if self.check_hotkey_match(parts, current_key_name):
+                    self.bridge.toggle_click_through.emit()
+                    return
 
-        if self.hotkey_follow:
-            parts = [p.lower() for p in self.hotkey_follow.split('+')]
-            if self.check_hotkey_match(parts, current_key_name):
-                self.bridge.toggle_follow.emit()
-                return
+            if self.hotkey_hide:
+                parts = [p.lower() for p in self.hotkey_hide.split('+')]
+                if self.check_hotkey_match(parts, current_key_name):
+                    self.bridge.toggle_hide.emit()
+                    return
+
+            if self.hotkey_follow:
+                parts = [p.lower() for p in self.hotkey_follow.split('+')]
+                if self.check_hotkey_match(parts, current_key_name):
+                    self.bridge.toggle_follow.emit()
+                    return
+        except Exception as e:
+            try:
+                import traceback
+                with open("hotkey_error.log", "a", encoding="utf-8") as f:
+                    f.write(f"Error in on_key_press: {str(e)}\n{traceback.format_exc()}\n")
+            except Exception:
+                pass
 
     def on_key_release(self, key):
         if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
