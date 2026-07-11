@@ -1821,10 +1821,17 @@ class MagnifierWindow(QMainWindow):
                 player_name=self.player_name
             )
             self.client.status_updated.connect(self.party_panel.update_states)
+            self.client.connection_failed.connect(self.on_client_connection_failed)
             self.client.start()
             self.client_running = True
         except Exception as e:
             show_dark_message_box(self, "접속 오류", f"대기실 접속 시도 중 오류가 발생했습니다:\n{str(e)}", QMessageBox.Icon.Critical)
+
+    def on_client_connection_failed(self, error_msg):
+        # Update settings status label dynamically on connection issues
+        if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible():
+            self.config_dialog_ref.lbl_client_status.setText("접속 끊김/실패")
+            self.config_dialog_ref.lbl_client_status.setStyleSheet("color: #ff453a; font-weight: 600; border: none; background: transparent;")
 
     def stop_party_client(self):
         if self.client:
@@ -1912,8 +1919,10 @@ class MagnifierWindow(QMainWindow):
         try:
             self.is_settings_open = True
             dialog = SettingsModal(self)
+            self.config_dialog_ref = dialog
             dialog.exec()
             self.is_settings_open = False
+            self.config_dialog_ref = None
         except Exception as e:
             self.is_settings_open = False
             err_msg = f"설정 창 실행 중 예외가 발생했습니다:\n{str(e)}\n\n{traceback.format_exc()}"
