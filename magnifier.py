@@ -24,12 +24,168 @@ GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
 
+def get_icon_path():
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, "icon2.ico")
+    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    local_path = os.path.join(exe_dir, "icon2.ico")
+    if os.path.exists(local_path):
+        return local_path
+    if os.path.exists("icon2.ico"):
+        return "icon2.ico"
+    return ""
+
 class InputBridge(QObject):
     zoom_changed = pyqtSignal(int)
     toggle_follow = pyqtSignal()
     toggle_click_through = pyqtSignal()
     toggle_hide = pyqtSignal()
     hotkey_set = pyqtSignal(str)
+
+class SettingsModal(QDialog):
+    def __init__(self, current_hotkey, bridge, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("설정")
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        self.current_hotkey = current_hotkey
+        self.bridge = bridge
+        self.is_setting_hotkey = False
+        
+        self.setStyleSheet("""
+            #ModalContainer {
+                background-color: rgba(28, 28, 30, 0.96);
+                border: 1.5px solid rgba(255, 255, 255, 0.15);
+                border-radius: 16px;
+            }
+            QLabel {
+                color: #ffffff;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            }
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.08);
+                color: #ffffff;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 12px;
+                padding: 8px 16px;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.16);
+            }
+            QPushButton#SaveBtn {
+                background-color: #0066cc;
+                border: none;
+                font-weight: 600;
+            }
+            QPushButton#SaveBtn:hover {
+                background-color: #0071e3;
+            }
+            QPushButton:pressed {
+                transform: scale(0.96);
+            }
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        container = QFrame()
+        container.setObjectName("ModalContainer")
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(20, 20, 20, 20)
+        container_layout.setSpacing(14)
+        
+        title_label = QLabel("⚙️ 펭구 줌인 설정")
+        title_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #ffffff;")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        container_layout.addWidget(title_label)
+        
+        # Hotkey Configuration Section
+        hotkey_group = QHBoxLayout()
+        hotkey_label = QLabel("따라오기 단축키:")
+        hotkey_label.setStyleSheet("font-size: 13px; color: #cccccc;")
+        hotkey_group.addWidget(hotkey_label)
+        
+        display_key = self.current_hotkey if self.current_hotkey else "Ctrl+MiddleClick"
+        self.hotkey_btn = QPushButton(display_key)
+        self.hotkey_btn.clicked.connect(self.start_setting)
+        hotkey_group.addWidget(self.hotkey_btn)
+        container_layout.addLayout(hotkey_group)
+        
+        # Info text
+        info_label = QLabel("※ 변경 버튼을 누른 뒤 원하는 단축키 조합(예: Ctrl+F1)을 누르세요. 마우스 휠 클릭 단축키로 돌리려면 단축키가 변경 중일 때 ESC 키를 누르거나 초기화하십시오.")
+        info_label.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.5); line-height: 1.4;")
+        info_label.setWordWrap(True)
+        container_layout.addWidget(info_label)
+        
+        # Action Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        self.reset_btn = QPushButton("기본값 초기화")
+        self.reset_btn.clicked.connect(self.reset_to_default)
+        btn_layout.addWidget(self.reset_btn)
+        
+        self.save_btn = QPushButton("확인")
+        self.save_btn.setObjectName("SaveBtn")
+        self.save_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(self.save_btn)
+        
+        container_layout.addLayout(btn_layout)
+        layout.addWidget(container)
+        self.resize(320, 220)
+        
+        self.old_pos = None
+        self.bridge.hotkey_set.connect(self.on_hotkey_updated)
+        
+    def start_setting(self):
+        self.is_setting_hotkey = True
+        self.hotkey_btn.setText("키 입력 대기 중...")
+        self.hotkey_btn.setStyleSheet("background-color: rgba(255, 214, 10, 0.2); color: #ffd60a; border: 1px solid rgba(255, 214, 10, 0.4);")
+        if self.parent():
+            self.parent().is_setting_hotkey = True
+
+    def on_hotkey_updated(self, key_name):
+        self.current_hotkey = key_name
+        self.hotkey_btn.setText(key_name)
+        self.hotkey_btn.setStyleSheet("")
+        self.is_setting_hotkey = False
+        if self.parent():
+            self.parent().is_setting_hotkey = False
+            self.parent().custom_hotkey = key_name
+            
+    def reset_to_default(self):
+        self.current_hotkey = None
+        self.hotkey_btn.setText("Ctrl+MiddleClick")
+        self.hotkey_btn.setStyleSheet("")
+        self.is_setting_hotkey = False
+        if self.parent():
+            self.parent().is_setting_hotkey = False
+            self.parent().custom_hotkey = None
+
+    def keyPressEvent(self, event):
+        if self.is_setting_hotkey and event.key() == Qt.Key.Key_Escape:
+            self.reset_to_default()
+            event.accept()
+        elif event.key() == Qt.Key.Key_Escape:
+            self.reject()
+        else:
+            super().keyPressEvent(event)
+            
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.old_pos = event.globalPosition().toPoint()
+            
+    def mouseMoveEvent(self, event):
+        if self.old_pos is not None:
+            delta = event.globalPosition().toPoint() - self.old_pos
+            self.move(self.x() + delta.x(), self.y() + delta.y())
+            self.old_pos = event.globalPosition().toPoint()
+            
+    def mouseReleaseEvent(self, event):
+        self.old_pos = None
 
 class HelpModal(QDialog):
     def __init__(self, parent=None):
@@ -244,14 +400,10 @@ class MagnifierWindow(QMainWindow):
         self.zoom_slider.setValue(int(self.zoom_factor * 10))
         self.opacity_slider.setValue(self.opacity_value)
         self.setWindowOpacity(self.opacity_value / 100.0)
-        if self.custom_hotkey:
-            self.hotkey_btn.setText(f'단축키: {self.custom_hotkey}')
 
     def load_icon(self):
-        icon_path = "icon2.ico"
-        if hasattr(sys, '_MEIPASS'):
-            icon_path = os.path.join(sys._MEIPASS, "icon2.ico")
-        if os.path.exists(icon_path):
+        icon_path = get_icon_path()
+        if icon_path:
             self.setWindowIcon(QIcon(icon_path))
 
     def get_config_path(self):
@@ -341,14 +493,23 @@ class MagnifierWindow(QMainWindow):
                 background-color: rgba(255, 255, 255, 0.16);
             }
             QPushButton#MinimizeBtn {
-                background-color: rgba(255, 255, 255, 0.08);
-                color: #e0e0e0;
-                border: 1px solid rgba(255, 255, 255, 0.1);
+                background-color: rgba(255, 214, 10, 0.2);
+                color: #ffd60a;
+                border: 1px solid rgba(255, 214, 10, 0.3);
                 border-radius: 12px;
                 font-size: 10px;
                 font-weight: bold;
             }
             QPushButton#MinimizeBtn:hover {
+                background-color: rgba(255, 214, 10, 0.35);
+            }
+            QPushButton#SettingsBtn {
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 12px;
+                font-size: 13px;
+            }
+            QPushButton#SettingsBtn:hover {
                 background-color: rgba(255, 255, 255, 0.16);
             }
             QSlider::groove:horizontal {
@@ -393,12 +554,18 @@ class MagnifierWindow(QMainWindow):
         
         self.title_layout.addStretch()
         
-        # Top-right button cluster (Minimize, Help, Close) all as 24x24 circular buttons
+        # Top-right button cluster (Minimize, Settings, Help, Close) all as 24x24 circular buttons
         self.minimize_btn = QPushButton('─')
         self.minimize_btn.setObjectName('MinimizeBtn')
         self.minimize_btn.setFixedSize(24, 24)
         self.minimize_btn.clicked.connect(self.showMinimized)
         self.title_layout.addWidget(self.minimize_btn)
+        
+        self.settings_btn = QPushButton('⚙')
+        self.settings_btn.setObjectName('SettingsBtn')
+        self.settings_btn.setFixedSize(24, 24)
+        self.settings_btn.clicked.connect(self.show_settings)
+        self.title_layout.addWidget(self.settings_btn)
         
         self.help_btn = QPushButton('?')
         self.help_btn.setObjectName('HelpBtn')
@@ -414,17 +581,13 @@ class MagnifierWindow(QMainWindow):
         
         self.main_layout.addLayout(self.title_layout)
         
-        # Row for Click-Through Toggle and Hotkey Setting
+        # Row for Click-Through Toggle (occupies full width since hotkey button is removed)
         self.config_layout = QHBoxLayout()
         self.config_layout.setSpacing(8)
         
         self.click_through_btn = QPushButton('마우스 투과: 끔')
         self.click_through_btn.clicked.connect(self.toggle_click_through)
         self.config_layout.addWidget(self.click_through_btn)
-        
-        self.hotkey_btn = QPushButton('따라오기 단축키 변경 (Ctrl+휠클릭)')
-        self.hotkey_btn.clicked.connect(self.start_setting_hotkey)
-        self.config_layout.addWidget(self.hotkey_btn)
         
         self.main_layout.addLayout(self.config_layout)
         
@@ -478,15 +641,16 @@ class MagnifierWindow(QMainWindow):
         
         self.main_layout.addLayout(self.sliders_layout)
 
+    def show_settings(self):
+        modal = SettingsModal(self.custom_hotkey, self.bridge, self)
+        modal.exec()
+
     def start_setting_hotkey(self):
+        # Triggered from settings modal
         self.is_setting_hotkey = True
-        self.hotkey_btn.setText('키 입력 대기 중 (Ctrl+F1 등)...')
-        self.hotkey_btn.setStyleSheet('background-color: rgba(255, 214, 10, 0.2); color: #ffd60a; border: 1px solid rgba(255, 214, 10, 0.4);')
 
     def on_hotkey_set(self, key_name):
         self.custom_hotkey = key_name
-        self.hotkey_btn.setText(f'단축키: {key_name}')
-        self.hotkey_btn.setStyleSheet('')
         self.is_setting_hotkey = False
 
     def on_key_press(self, key):
@@ -612,7 +776,6 @@ class MagnifierWindow(QMainWindow):
         self.click_through = not self.click_through
         hwnd = int(self.winId())
         
-        # Get current styles
         style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         if self.click_through:
             new_style = style | WS_EX_TRANSPARENT | WS_EX_LAYERED
@@ -625,7 +788,7 @@ class MagnifierWindow(QMainWindow):
             
         # Apply style change directly to native window without re-creating window (Fixes window flickers!)
         ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
-        # SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE = 0x0037
+        # Force frame update immediately to apply EXSTYLE without hide/show (SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE = 0x0037)
         ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)
         
         self.click_through_btn.style().unpolish(self.click_through_btn)
@@ -725,6 +888,9 @@ class MagnifierWindow(QMainWindow):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    icon_path = get_icon_path()
+    if icon_path:
+        app.setWindowIcon(QIcon(icon_path))
     window = MagnifierWindow()
     window.show()
     sys.exit(app.exec())
