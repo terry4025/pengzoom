@@ -18,7 +18,7 @@ from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon,
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
 from PIL import Image
-from pynput import keyboard
+from pynput import keyboard, mouse
 import cv2
 
 # Import our custom modules
@@ -1021,6 +1021,26 @@ class SettingsModal(QDialog):
             super().keyPressEvent(event)
             
     def mousePressEvent(self, event):
+        if self.is_setting_target is not None:
+            if event.button() == Qt.MouseButton.MiddleButton:
+                final_hotkey = "Ctrl+MiddleClick"
+                if self.is_setting_target == 'follow':
+                    self.temp_follow = final_hotkey
+                    self.btn_follow.setText(final_hotkey)
+                elif self.is_setting_target == 'transparent':
+                    self.temp_transparent = final_hotkey
+                    self.btn_transparent.setText(final_hotkey)
+                elif self.is_setting_target == 'hide':
+                    self.temp_hide = final_hotkey
+                    self.btn_hide.setText(final_hotkey)
+                    
+                self.btn_follow.setStyleSheet("")
+                self.btn_transparent.setStyleSheet("")
+                self.btn_hide.setStyleSheet("")
+                self.is_setting_target = None
+                event.accept()
+                return
+                
         if event.button() == Qt.MouseButton.LeftButton:
             self.old_pos = event.globalPosition().toPoint()
             
@@ -1289,10 +1309,16 @@ class MagnifierWindow(QMainWindow):
         self.setWindowOpacity(self.opacity_value / 100.0)
 
     # Removed QMouseListener completely to prevent initial loading lag (Option 2 applied!)
+    # Resurrected on_click ONLY to support Ctrl+MiddleClick without mouse movement lag!
     def start_listeners(self):
         try:
             self.key_listener = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
             self.key_listener.start()
+        except Exception:
+            pass
+        try:
+            self.mouse_listener = mouse.Listener(on_click=self.on_mouse_click)
+            self.mouse_listener.start()
         except Exception:
             pass
 
@@ -1302,10 +1328,22 @@ class MagnifierWindow(QMainWindow):
                 self.key_listener.stop()
         except Exception:
             pass
+        try:
+            if hasattr(self, 'mouse_listener') and self.mouse_listener:
+                self.mouse_listener.stop()
+        except Exception:
+            pass
 
     def resume_listeners(self):
         self.pause_listeners()
         self.start_listeners()
+
+    def on_mouse_click(self, x, y, button, pressed):
+        if pressed and str(button) == "Button.middle":
+            # Realtime Ctrl key check using Win32 API to prevent state locking issues
+            is_ctrl = ctypes.windll.user32.GetKeyState(0x11) < 0
+            if is_ctrl and self.hotkey_follow == "Ctrl+MiddleClick":
+                self.bridge.toggle_follow.emit()
 
     # Capture wheel events on top of the magnifier screen when window is focused
     def wheelEvent(self, event: QWheelEvent):
@@ -1977,7 +2015,11 @@ class MagnifierWindow(QMainWindow):
         req_ctrl = 'ctrl' in parsed_parts
         req_alt = 'alt' in parsed_parts
         
-        if self.ctrl_pressed != req_ctrl or self.alt_pressed != req_alt:
+        # Real-time state check using Win32 API to bypass listener tracking loss
+        actual_ctrl = ctypes.windll.user32.GetKeyState(0x11) < 0
+        actual_alt = ctypes.windll.user32.GetKeyState(0x12) < 0
+        
+        if actual_ctrl != req_ctrl or actual_alt != req_alt:
             return False
             
         if target_key == 't' and is_t_key:
@@ -2002,6 +2044,16 @@ class MagnifierWindow(QMainWindow):
                 current_key_name = str(key).replace('Key.', '').lower()
         except Exception:
             current_key_name = str(key).lower()
+            
+        # Guarantee non-english layout compatibility by forced virtual key mapping (VK A-Z, 0-9)
+        if hasattr(key, 'vk') and key.vk is not None:
+            vk = key.vk
+            if 65 <= vk <= 90:
+                current_key_name = chr(vk).lower()
+            elif 96 <= vk <= 105:
+                current_key_name = str(vk - 96)
+            elif 48 <= vk <= 57:
+                current_key_name = str(vk - 48)
             
         is_t_key = False
         is_h_key = False
