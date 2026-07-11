@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout,
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
                              QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
                              QCheckBox)
-from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject
+from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject, QSize
 from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence, QWheelEvent
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
@@ -1704,7 +1704,7 @@ class MagnifierWindow(QMainWindow):
             # 2. Retrieve previously stored size to restore exactly what the user size adjusted
             target_size = getattr(self, 'last_normal_size', None)
             if target_size is None or target_size.width() < 100 or target_size.height() < 100:
-                target_size = QPoint(420, 540)
+                target_size = QSize(420, 540)
             
             # 3. Restore larger minimum size constraints for settings mode to prevent overlaps
             self.setMinimumSize(250, 300)
@@ -2010,22 +2010,20 @@ class MagnifierWindow(QMainWindow):
     def get_display_text(self, val, fallback):
         return val if val else fallback
 
-    def check_hotkey_match(self, parsed_parts, current_key_name, is_t_key, is_h_key):
+    def check_hotkey_match(self, parsed_parts, current_key_name):
         target_key = parsed_parts[-1].lower()
         req_ctrl = 'ctrl' in parsed_parts
         req_alt = 'alt' in parsed_parts
+        req_shift = 'shift' in parsed_parts
         
         # Real-time state check using Win32 API to bypass listener tracking loss
         actual_ctrl = ctypes.windll.user32.GetKeyState(0x11) < 0
         actual_alt = ctypes.windll.user32.GetKeyState(0x12) < 0
+        actual_shift = ctypes.windll.user32.GetKeyState(0x10) < 0
         
-        if actual_ctrl != req_ctrl or actual_alt != req_alt:
+        if actual_ctrl != req_ctrl or actual_alt != req_alt or actual_shift != req_shift:
             return False
             
-        if target_key == 't' and is_t_key:
-            return True
-        if target_key == 'h' and is_h_key:
-            return True
         if current_key_name == target_key:
             return True
             
@@ -2034,11 +2032,6 @@ class MagnifierWindow(QMainWindow):
     def on_key_press(self, key):
         if self.is_settings_open or self.is_setting_hotkey:
             return
-            
-        if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
-            self.ctrl_pressed = True
-        elif key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
-            self.alt_pressed = True
             
         try:
             if hasattr(key, 'char') and key.char:
@@ -2058,37 +2051,24 @@ class MagnifierWindow(QMainWindow):
             elif 48 <= vk <= 57:
                 current_key_name = str(vk - 48)
             
-        is_t_key = False
-        is_h_key = False
-        if hasattr(key, 'vk'):
-            if key.vk == 84:
-                is_t_key = True
-            elif key.vk == 72:
-                is_h_key = True
-        
-        if not is_t_key and current_key_name in ['t', 'ㅅ']:
-            is_t_key = True
-        if not is_h_key and current_key_name in ['h', 'ㅗ']:
-            is_h_key = True
-
         if self.is_setting_hotkey:
             return
 
         if self.hotkey_transparent:
             parts = [p.lower() for p in self.hotkey_transparent.split('+')]
-            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
+            if self.check_hotkey_match(parts, current_key_name):
                 self.bridge.toggle_click_through.emit()
                 return
 
         if self.hotkey_hide:
             parts = [p.lower() for p in self.hotkey_hide.split('+')]
-            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
+            if self.check_hotkey_match(parts, current_key_name):
                 self.bridge.toggle_hide.emit()
                 return
 
         if self.hotkey_follow:
             parts = [p.lower() for p in self.hotkey_follow.split('+')]
-            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
+            if self.check_hotkey_match(parts, current_key_name):
                 self.bridge.toggle_follow.emit()
                 return
 
