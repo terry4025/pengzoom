@@ -1925,14 +1925,27 @@ class MagnifierWindow(QMainWindow):
         try:
             # 1. 렉 없는 마우스 휠 클릭 감지 (WH_MOUSE_LL 훅 미사용)
             # VK_MBUTTON = 0x04
-            curr_mbutton = ctypes.windll.user32.GetKeyState(0x04) < 0
+            curr_mbutton = ctypes.windll.user32.GetAsyncKeyState(0x04) < 0
             
             # 마우스 미들 버튼이 이번 프레임에 막 눌린 경우 (Edge Trigger)
             if curr_mbutton and not self.last_mbutton_pressed:
                 if not self.is_settings_open and not self.is_setting_hotkey:
-                    is_ctrl = ctypes.windll.user32.GetKeyState(0x11) < 0
-                    if is_ctrl and self.hotkey_follow == "Ctrl+MiddleClick":
-                        self.bridge.toggle_follow.emit()
+                    if self.hotkey_follow:
+                        lower_hotkey = self.hotkey_follow.lower()
+                        if lower_hotkey == "ctrl+middleclick":
+                            is_ctrl = ctypes.windll.user32.GetAsyncKeyState(0x11) < 0
+                            if is_ctrl:
+                                self.bridge.toggle_follow_mouse.emit()
+                        elif lower_hotkey == "shift+middleclick":
+                            is_shift = ctypes.windll.user32.GetAsyncKeyState(0x10) < 0
+                            if is_shift:
+                                self.bridge.toggle_follow_mouse.emit()
+                        elif lower_hotkey == "alt+middleclick":
+                            is_alt = ctypes.windll.user32.GetAsyncKeyState(0x12) < 0
+                            if is_alt:
+                                self.bridge.toggle_follow_mouse.emit()
+                        elif lower_hotkey == "middleclick":
+                            self.bridge.toggle_follow_mouse.emit()
             
             self.last_mbutton_pressed = curr_mbutton
         except Exception:
@@ -2016,10 +2029,10 @@ class MagnifierWindow(QMainWindow):
         req_alt = 'alt' in parsed_parts
         req_shift = 'shift' in parsed_parts
         
-        # Real-time state check using Win32 API to bypass listener tracking loss
-        actual_ctrl = ctypes.windll.user32.GetKeyState(0x11) < 0
-        actual_alt = ctypes.windll.user32.GetKeyState(0x12) < 0
-        actual_shift = ctypes.windll.user32.GetKeyState(0x10) < 0
+        # Real-time state check using Win32 API GetAsyncKeyState to bypass focus/tracking loss
+        actual_ctrl = ctypes.windll.user32.GetAsyncKeyState(0x11) < 0
+        actual_alt = ctypes.windll.user32.GetAsyncKeyState(0x12) < 0
+        actual_shift = ctypes.windll.user32.GetAsyncKeyState(0x10) < 0
         
         if actual_ctrl != req_ctrl or actual_alt != req_alt or actual_shift != req_shift:
             return False
