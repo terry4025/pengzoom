@@ -69,8 +69,13 @@ class CooldownServer(QObject):
     def _run_server(self):
         try:
             self.server.run()
-        except Exception:
-            pass
+        except Exception as e:
+            import traceback
+            try:
+                with open("server_error.log", "w", encoding="utf-8") as f:
+                    f.write(f"Server Run Error: {str(e)}\n{traceback.format_exc()}\n")
+            except Exception:
+                pass
             
     def stop(self):
         if self.server:

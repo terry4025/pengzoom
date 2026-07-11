@@ -1830,7 +1830,9 @@ class MagnifierWindow(QMainWindow):
     def on_client_connection_failed(self, error_msg):
         # Update settings status label dynamically on connection issues
         if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible():
-            self.config_dialog_ref.lbl_client_status.setText("접속 끊김/실패")
+            # Shorten the message if it's too long
+            short_msg = error_msg.split(":")[-1].strip() if ":" in error_msg else error_msg
+            self.config_dialog_ref.lbl_client_status.setText(f"실패: {short_msg[:20]}")
             self.config_dialog_ref.lbl_client_status.setStyleSheet("color: #ff453a; font-weight: 600; border: none; background: transparent;")
 
     def stop_party_client(self):
@@ -2155,6 +2157,9 @@ class MagnifierWindow(QMainWindow):
         super().closeEvent(event)
 
 if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()
+    
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     
