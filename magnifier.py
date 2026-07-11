@@ -1304,6 +1304,11 @@ class MagnifierWindow(QMainWindow):
         self.timer.timeout.connect(self.update_magnifier)
         self.timer.start(16)
         
+        # Periodic timer to broadcast current skill states to the party server every 2 seconds
+        self.party_sync_timer = QTimer()
+        self.party_sync_timer.timeout.connect(self.broadcast_skill_states)
+        self.party_sync_timer.start(2000)
+        
         self.resize(420, 540)
         self.old_pos = None
         
@@ -1705,7 +1710,7 @@ class MagnifierWindow(QMainWindow):
             # 2. Retrieve previously stored size to restore exactly what the user size adjusted
             target_size = getattr(self, 'last_normal_size', None)
             if target_size is None or target_size.width() < 100 or target_size.height() < 100:
-                target_size = QSize(420, 540)
+                target_size = self.size()
             
             # 3. Restore larger minimum size constraints for settings mode to prevent overlaps
             self.setMinimumSize(250, 300)
@@ -1783,6 +1788,12 @@ class MagnifierWindow(QMainWindow):
         # Send update to party server if active
         if self.client_running and self.client:
             self.client.send_update(name, is_ready)
+
+    def broadcast_skill_states(self):
+        # Periodically send all registered skill states to keep party server alive and sync initial states
+        if self.client_running and self.client:
+            for name, slot in self.detector.slots.items():
+                self.client.send_update(name, slot.is_ready)
 
     # Server hosting control (uses show_dark_message_box for gorgeous contrast popup)
     def start_party_server(self):
