@@ -55,6 +55,19 @@ LUCIDE_CLOSE_SVG = """
 </svg>
 """
 
+# Custom Lucide-styled Penguin SVG design (stroke-width: 2.3, color: #0a84ff)
+LUCIDE_PENGUIN_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0a84ff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-penguin">
+  <path d="M12 2a4 4 0 0 0-4 4v3a6 6 0 0 0 12 0V6a4 4 0 0 0-4-4z"/>
+  <path d="M12 8a2.5 2.5 0 0 0-2.5 2.5v3.5a2.5 2.5 0 0 0 5 0v-3.5A2.5 2.5 0 0 0 12 8z"/>
+  <path d="M6 10c-1 1-1.5 2.5-1 4 .5 1.5 2 2 3 1.5"/>
+  <path d="M18 10c1 1 1.5 2.5 1 4-.5 1.5-2 2-3 1.5"/>
+  <path d="M11 6.5l1 1 1-1-1-.5z" fill="#0a84ff"/>
+  <path d="M9 20l-1 2h3l-1-2"/>
+  <path d="M15 20l1 2h-3l1-2"/>
+</svg>
+"""
+
 def get_icon_path():
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, "icon2.ico")
@@ -380,10 +393,21 @@ class HelpModal(QDialog):
         container_layout.setContentsMargins(24, 24, 24, 24)
         container_layout.setSpacing(16)
         
-        title_label = QLabel("🐧 펭구쫭을 위한 사용 가이드")
+        # Lucide Penguin Icon next to clean title label text (Replaces unicode emoji penguin)
+        title_layout_row = QHBoxLayout()
+        title_layout_row.setSpacing(8)
+        title_layout_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        title_icon = QLabel()
+        title_icon.setFixedSize(22, 22)
+        title_icon.setPixmap(get_svg_icon(LUCIDE_PENGUIN_SVG).pixmap(22, 22))
+        
+        title_label = QLabel("펭구쫭을 위한 사용 가이드")
         title_label.setStyleSheet("font-size: 18px; font-weight: 600; color: #ffffff;")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        container_layout.addWidget(title_label)
+        
+        title_layout_row.addWidget(title_icon)
+        title_layout_row.addWidget(title_label)
+        container_layout.addLayout(title_layout_row)
         
         content_label = QLabel(
             "<b>주요 단축키 및 조작법</b><br><br>"
@@ -393,8 +417,8 @@ class HelpModal(QDialog):
             "4. <b>투명도 설정</b>: 하단 투명도 슬라이더 사용 (15% ~ 100%)<br>"
             "5. <b>마우스 투과 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + T</span> (또는 설정 단축키)<br>"
             "   <i>※ 투과 모드가 켜지면 마우스 클릭이 창을 통과해 뒤쪽 게임을 조작할 수 있습니다. 다시 일반 모드로 돌아오려면 단축키를 누르세요.</i><br>"
-            "6. <b>프로그램 최소화 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + H</span> (또는 설정 단축키) 또는 상단 최소화 [─] 버튼<br>"
-            "7. <b>프로그램 설정</b>: 상단 [⚙] 버튼 클릭<br>"
+            "6. <b>프로그램 최소화 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + H</span> (또는 설정 단축키) 또는 상단 최소화 [-] 버튼<br>"
+            "7. <b>프로그램 설정</b>: 상단 설정 버튼 클릭<br>"
             "8. <b>프로그램 종료</b>: [X] 버튼 또는 ESC 키"
         )
         content_label.setStyleSheet("font-size: 13px; line-height: 1.5; color: #cccccc;")
