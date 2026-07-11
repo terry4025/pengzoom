@@ -26,11 +26,32 @@ GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
 
-# Lucide Settings Icon SVG Data (stroke-width: 2.5, Green color representation)
+# Lucide Icons SVG Data with precise color mapping and strong stroke widths
+LUCIDE_MINIMIZE_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffd60a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-minus">
+  <path d="M5 12h14"/>
+</svg>
+"""
+
 LUCIDE_SETTINGS_SVG = """
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#30d158" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings">
   <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
   <circle cx="12" cy="12" r="3"/>
+</svg>
+"""
+
+LUCIDE_HELP_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0a84ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-help-circle">
+  <circle cx="12" cy="12" r="10"/>
+  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+  <line x1="12" y1="17" x2="12.01" y2="17"/>
+</svg>
+"""
+
+LUCIDE_CLOSE_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff453a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x">
+  <line x1="18" y1="6" x2="6" y2="18"/>
+  <line x1="6" y1="6" x2="18" y2="18"/>
 </svg>
 """
 
@@ -56,6 +77,23 @@ def get_svg_icon(svg_str):
         return QIcon(pixmap)
     except Exception:
         return QIcon()
+
+# Win32 helper to force system taskbar icon updates via SendMessageW using toWinHICON
+def force_set_window_icon(hwnd, icon_path):
+    if not os.path.exists(icon_path):
+        return
+    try:
+        pixmap = QPixmap(icon_path)
+        if not pixmap.isNull():
+            hicon = pixmap.toWinHICON()
+            if hicon:
+                WM_SETICON = 0x0080
+                ICON_SMALL = 0
+                ICON_BIG = 1
+                ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, int(hicon))
+                ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, int(hicon))
+    except Exception:
+        pass
 
 class InputBridge(QObject):
     zoom_changed = pyqtSignal(int)
@@ -122,10 +160,21 @@ class SettingsModal(QDialog):
         container_layout.setContentsMargins(20, 20, 20, 20)
         container_layout.setSpacing(14)
         
-        title_label = QLabel("⚙️ 펭구 줌인 설정")
+        # Lucide Settings Icon next to clean title label text (Replaces unicode emoji gear)
+        title_layout_row = QHBoxLayout()
+        title_layout_row.setSpacing(8)
+        title_layout_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        title_icon = QLabel()
+        title_icon.setFixedSize(20, 20)
+        title_icon.setPixmap(get_svg_icon(LUCIDE_SETTINGS_SVG).pixmap(20, 20))
+        
+        title_label = QLabel("펭구 줌인 설정")
         title_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #ffffff;")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        container_layout.addWidget(title_label)
+        
+        title_layout_row.addWidget(title_icon)
+        title_layout_row.addWidget(title_label)
+        container_layout.addLayout(title_layout_row)
         
         # Grid layout for hotkey configurations
         grid = QGridLayout()
@@ -187,7 +236,6 @@ class SettingsModal(QDialog):
 
     def start_setting(self, target, button):
         self.is_setting_target = target
-        # Reset styles on other buttons
         self.btn_follow.setStyleSheet("")
         self.btn_transparent.setStyleSheet("")
         self.btn_hide.setStyleSheet("")
@@ -210,7 +258,6 @@ class SettingsModal(QDialog):
         self.is_setting_target = None
 
     def save_and_close(self):
-        # Save temporary values to parent window
         self.parent_window.hotkey_follow = self.temp_follow
         self.parent_window.hotkey_transparent = self.temp_transparent
         self.parent_window.hotkey_hide = self.temp_hide
@@ -218,7 +265,6 @@ class SettingsModal(QDialog):
 
     def keyPressEvent(self, event):
         if self.is_setting_target is not None:
-            # Capture hotkeys from event
             modifiers = []
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 modifiers.append("Ctrl")
@@ -230,7 +276,6 @@ class SettingsModal(QDialog):
                 event.accept()
                 return
                 
-            # If ESC is pressed, reset key assignment
             if key == Qt.Key.Key_Escape:
                 if self.is_setting_target == 'follow':
                     self.temp_follow = None
@@ -242,7 +287,6 @@ class SettingsModal(QDialog):
                     self.temp_hide = None
                     self.btn_hide.setText("사용 안 함")
                 
-                # Reset styles
                 self.btn_follow.setStyleSheet("")
                 self.btn_transparent.setStyleSheet("")
                 self.btn_hide.setStyleSheet("")
@@ -250,7 +294,6 @@ class SettingsModal(QDialog):
                 event.accept()
                 return
                 
-            # Parse normal keys
             key_name = QKeySequence(key).toString().upper()
             if not key_name:
                 event.accept()
@@ -269,7 +312,6 @@ class SettingsModal(QDialog):
                 self.temp_hide = final_hotkey
                 self.btn_hide.setText(final_hotkey)
                 
-            # Reset button styles
             self.btn_follow.setStyleSheet("")
             self.btn_transparent.setStyleSheet("")
             self.btn_hide.setStyleSheet("")
@@ -466,16 +508,12 @@ class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('펭구 줌인 Pro v2.0')
-        # Add Qt.WindowType.Window to force taskbar icon grouping and generation in Windows OS
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        # Load window icon
         self.load_icon()
-        
-        # Load previous settings or default
         self.load_settings()
         
         self.follow_mouse = True
@@ -499,6 +537,9 @@ class MagnifierWindow(QMainWindow):
         
         self.setup_ui()
         
+        # Apply native win32 SendMessageW to guarantee the taskbar icon displays 100% correctly
+        force_set_window_icon(int(self.winId()), get_icon_path())
+        
         self.sct = mss.mss()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_magnifier)
@@ -507,10 +548,13 @@ class MagnifierWindow(QMainWindow):
         self.resize(420, 540)
         self.old_pos = None
         
-        # Apply loaded settings to widgets
         self.zoom_slider.setValue(int(self.zoom_factor * 10))
         self.opacity_slider.setValue(self.opacity_value)
         self.setWindowOpacity(self.opacity_value / 100.0)
+
+    def showEvent(self, event):
+        force_set_window_icon(int(self.winId()), get_icon_path())
+        super().showEvent(event)
 
     def load_icon(self):
         icon_path = get_icon_path()
@@ -539,7 +583,6 @@ class MagnifierWindow(QMainWindow):
             except Exception:
                 pass
         
-        # Default fallback settings
         self.zoom_factor = 2.0
         self.opacity_value = 100
         self.hotkey_follow = None
@@ -593,14 +636,10 @@ class MagnifierWindow(QMainWindow):
                 background-color: #0071e3;
             }
             
-            /* High-contrast Apple Window Controls styles */
             QPushButton#MinimizeBtn {
                 background-color: rgba(255, 214, 10, 0.2);
-                color: #ffd60a;
                 border: 1px solid rgba(255, 214, 10, 0.3);
                 border-radius: 12px;
-                font-size: 11px;
-                font-weight: bold;
             }
             QPushButton#MinimizeBtn:hover {
                 background-color: rgba(255, 214, 10, 0.35);
@@ -617,11 +656,8 @@ class MagnifierWindow(QMainWindow):
             
             QPushButton#HelpBtn {
                 background-color: rgba(10, 132, 255, 0.2);
-                color: #0a84ff;
                 border: 1px solid rgba(10, 132, 255, 0.3);
                 border-radius: 12px;
-                font-size: 12px;
-                font-weight: bold;
             }
             QPushButton#HelpBtn:hover {
                 background-color: rgba(10, 132, 255, 0.35);
@@ -629,11 +665,8 @@ class MagnifierWindow(QMainWindow):
             
             QPushButton#CloseBtn {
                 background-color: rgba(255, 69, 58, 0.2);
-                color: #ff453a;
                 border: 1px solid rgba(255, 69, 58, 0.3);
                 border-radius: 12px;
-                font-size: 11px;
-                font-weight: bold;
             }
             QPushButton#CloseBtn:hover {
                 background-color: rgba(255, 69, 58, 0.35);
@@ -681,14 +714,14 @@ class MagnifierWindow(QMainWindow):
         
         self.title_layout.addStretch()
         
-        # Top-right button cluster (Minimize, Settings, Help, Close) all as 24x24 circular buttons
-        self.minimize_btn = QPushButton('-')  # Standard keyboard minus key to prevent unicode render errors
+        # Top-right button cluster (Minimize, Settings, Help, Close) all as 24x24 circular buttons with Lucide SVGs
+        self.minimize_btn = QPushButton()
         self.minimize_btn.setObjectName('MinimizeBtn')
         self.minimize_btn.setFixedSize(24, 24)
+        self.minimize_btn.setIcon(get_svg_icon(LUCIDE_MINIMIZE_SVG))
         self.minimize_btn.clicked.connect(self.showMinimized)
         self.title_layout.addWidget(self.minimize_btn)
         
-        # Lucide settings icon SVG loaded cleanly
         self.settings_btn = QPushButton()
         self.settings_btn.setObjectName('SettingsBtn')
         self.settings_btn.setFixedSize(24, 24)
@@ -696,15 +729,17 @@ class MagnifierWindow(QMainWindow):
         self.settings_btn.clicked.connect(self.show_settings)
         self.title_layout.addWidget(self.settings_btn)
         
-        self.help_btn = QPushButton('?')
+        self.help_btn = QPushButton()
         self.help_btn.setObjectName('HelpBtn')
         self.help_btn.setFixedSize(24, 24)
+        self.help_btn.setIcon(get_svg_icon(LUCIDE_HELP_SVG))
         self.help_btn.clicked.connect(self.show_help)
         self.title_layout.addWidget(self.help_btn)
         
-        self.close_btn = QPushButton('X')  # Standard keyboard capital X to prevent unicode render errors
+        self.close_btn = QPushButton()
         self.close_btn.setObjectName('CloseBtn')
         self.close_btn.setFixedSize(24, 24)
+        self.close_btn.setIcon(get_svg_icon(LUCIDE_CLOSE_SVG))
         self.close_btn.clicked.connect(self.close)
         self.title_layout.addWidget(self.close_btn)
         
@@ -778,7 +813,6 @@ class MagnifierWindow(QMainWindow):
         self.is_setting_hotkey = True
 
     def on_hotkey_set(self, key_name):
-        # Relayed signal from SettingsModal
         pass
 
     def check_hotkey_match(self, parsed_parts, current_key_name, is_t_key, is_h_key):
@@ -786,11 +820,9 @@ class MagnifierWindow(QMainWindow):
         req_ctrl = 'ctrl' in parsed_parts
         req_alt = 'alt' in parsed_parts
         
-        # Modifier status match
         if self.ctrl_pressed != req_ctrl or self.alt_pressed != req_alt:
             return False
             
-        # Key code match
         if target_key == 't' and is_t_key:
             return True
         if target_key == 'h' and is_h_key:
@@ -814,7 +846,6 @@ class MagnifierWindow(QMainWindow):
         except Exception:
             current_key_name = str(key).lower()
             
-        # Detect physical vk codes for T and H
         is_t_key = False
         is_h_key = False
         if hasattr(key, 'vk'):
@@ -828,7 +859,6 @@ class MagnifierWindow(QMainWindow):
         if not is_h_key and current_key_name in ['h', 'ㅗ']:
             is_h_key = True
 
-        # Send Key events directly to SettingsModal if it's capturing keys
         if self.is_setting_hotkey:
             combo = []
             if self.ctrl_pressed:
@@ -836,7 +866,6 @@ class MagnifierWindow(QMainWindow):
             if self.alt_pressed:
                 combo.append('Alt')
             
-            # Map clean key names
             btn_key = current_key_name.upper()
             if btn_key in ['CTRL_L', 'CTRL_R', 'ALT_L', 'ALT_R', 'SHIFT', 'SHIFT_R', 'CMD']:
                 return
@@ -846,21 +875,18 @@ class MagnifierWindow(QMainWindow):
             self.bridge.hotkey_set.emit(final_hotkey)
             return
 
-        # 1. Match Click-Through Hotkey (Default: Ctrl+Alt+T)
         if self.hotkey_transparent:
             parts = [p.lower() for p in self.hotkey_transparent.split('+')]
             if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
                 self.bridge.toggle_click_through.emit()
                 return
 
-        # 2. Match Minimize Toggle Hotkey (Default: Ctrl+Alt+H)
         if self.hotkey_hide:
             parts = [p.lower() for p in self.hotkey_hide.split('+')]
             if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
                 self.bridge.toggle_hide.emit()
                 return
 
-        # 3. Match Follow Mouse Hotkey (Default: None/Disabled)
         if self.hotkey_follow:
             parts = [p.lower() for p in self.hotkey_follow.split('+')]
             if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
@@ -880,7 +906,6 @@ class MagnifierWindow(QMainWindow):
     def on_global_click(self, x, y, button, pressed):
         if not pressed:
             return
-        # If hotkey follow is None (default), use Ctrl+MiddleClick fallback
         if self.hotkey_follow is None:
             if button == mouse.Button.middle and self.ctrl_pressed:
                 self.bridge.toggle_follow.emit()
@@ -943,7 +968,6 @@ class MagnifierWindow(QMainWindow):
             self.click_through_btn.setText('마우스 투과: 끔')
             self.click_through_btn.setProperty("class", "")
             
-        # Apply style change directly to native window without re-creating window (Fixes window flickers!)
         ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
         ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)
         
