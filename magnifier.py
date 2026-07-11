@@ -797,6 +797,18 @@ class SettingsModal(QDialog):
         ip_row.addWidget(self.txt_host_url)
         guest_lay.addLayout(ip_row)
         
+        # Show LAN IP hint & warning for public profiles
+        lan_ip = network_manager.get_local_lan_ip()
+        net_cat = network_manager.get_network_category()
+        hint_text = f"※ 내 LAN IP: {lan_ip} (파티원 접속 시 입력할 주소)"
+        if net_cat == "Public":
+            hint_text += "\n⚠️ 현재 네트워크 프로필이 공용(Public)입니다! 방화벽에 의해 다른 PC의 접속이 차단될 수 있습니다."
+            
+        self.lbl_network_hint = QLabel(hint_text)
+        self.lbl_network_hint.setWordWrap(True)
+        self.lbl_network_hint.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.4); line-height: 1.3; border: none; background: transparent;")
+        guest_lay.addWidget(self.lbl_network_hint)
+        
         conn_row = QHBoxLayout()
         conn_row.setSpacing(10)
         self.btn_toggle_client = QPushButton("방 접속하기")
@@ -1803,8 +1815,29 @@ class MagnifierWindow(QMainWindow):
             self.server = network_manager.CooldownServer()
             self.server.start()
             self.server_running = True
+            
+            # Update server url to use the dynamically allocated port
+            self.server_url = f"http://127.0.0.1:{self.server.port}"
+            self.save_settings()
+            
+            # Dynamically update host url text field in open settings modal
+            if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible():
+                self.config_dialog_ref.txt_host_url.setText(self.server_url)
+                
         except Exception as e:
-            show_dark_message_box(self, "서버 오류", f"대기실 서버 가동 중 오류가 발생했습니다:\n{str(e)}", QMessageBox.Icon.Critical)
+            err_msg = str(e)
+            user_guide = ""
+            if "10013" in err_msg:
+                user_guide = "\n\n💡 [대처 요령]: 이 에러는 보안 프로그램(V3, 알약, 디펜더 등) 또는 윈도우 가상화 기능(Hyper-V/WSL)이 네트워크 포트를 차단했을 때 발생합니다. 백신의 실시간 감시를 잠시 끄시거나 방화벽 규칙을 허용해 주세요."
+            elif "10048" in err_msg:
+                user_guide = "\n\n💡 [대처 요령]: 해당 포트 대역이 이미 사용 중입니다. 백그라운드에 완전히 닫히지 않은 펭구 줌인 프로세스가 떠 있는지 확인해 보세요."
+                
+            show_dark_message_box(
+                self, 
+                "서버 오류", 
+                f"대기실 서버 가동 중 오류가 발생했습니다:\n{err_msg}{user_guide}", 
+                QMessageBox.Icon.Critical
+            )
 
     def stop_party_server(self):
         if self.server:
@@ -2158,9 +2191,40 @@ class MagnifierWindow(QMainWindow):
         self.pause_listeners()
         super().closeEvent(event)
 
+def kill_zombie_processes():
+    try:
+        import psutil
+        import os
+        current_pid = os.getpid()
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                pid = proc.info['pid']
+                if pid == current_pid:
+                    continue
+                
+                is_target = False
+                name = proc.info['name']
+                cmdline = proc.info['cmdline'] or []
+                
+                if name:
+                    if "펭구 줌인 Pro" in name or "PengZoomPro" in name:
+                        is_target = True
+                    elif "python" in name.lower():
+                        if any("magnifier.py" in arg for arg in cmdline):
+                            is_target = True
+                            
+                if is_target:
+                    p = psutil.Process(pid)
+                    p.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+    except Exception:
+        pass
+
 if __name__ == '__main__':
     import multiprocessing
     multiprocessing.freeze_support()
+    kill_zombie_processes()
     
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
@@ -2178,6 +2242,7 @@ if __name__ == '__main__':
     except Exception:
         pass
         
+        # Ensure icon is loaded properly
     window = MagnifierWindow()
     window.show()
     sys.exit(app.exec())

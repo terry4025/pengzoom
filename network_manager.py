@@ -65,6 +65,38 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
+def get_local_lan_ip():
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Try to connect to public DNS to get local route IP
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+def get_network_category():
+    import subprocess
+    try:
+        # Check network category without popping up CMD window using CREATE_NO_WINDOW flag
+        res = subprocess.run(
+            ["powershell", "-Command", "Get-NetConnectionProfile | Select-Object -ExpandProperty NetworkCategory"],
+            capture_output=True,
+            text=True,
+            creationflags=0x08000000
+        )
+        output = res.stdout.strip()
+        if "Public" in output:
+            return "Public"
+        elif "Private" in output:
+            return "Private"
+        return "Unknown"
+    except Exception:
+        return "Error"
+
+
 class CooldownServer(QObject):
     started = pyqtSignal()
     stopped = pyqtSignal()
@@ -80,16 +112,33 @@ class CooldownServer(QObject):
         if self.server_thread and self.server_thread.is_alive():
             return
             
-        try:
-            # Use multi-threaded HTTP server if possible
-            from http.server import ThreadingHTTPServer
-            self.httpd = ThreadingHTTPServer((self.host, self.port), PartyStatusHandler)
-        except ImportError:
-            self.httpd = HTTPServer((self.host, self.port), PartyStatusHandler)
+        host = self.host
+        port = self.port
+        success = False
+        last_err = None
+        
+        # Try binding from port to port+100 dynamically to bypass Windows port reservations
+        for p in range(port, port + 100):
+            try:
+                from http.server import ThreadingHTTPServer
+                self.httpd = ThreadingHTTPServer((host, p), PartyStatusHandler)
+                self.port = p
+                success = True
+                break
+            except OSError as e:
+                last_err = e
+                continue
+                
+        if not success:
+            err_msg = str(last_err) if last_err else "포트 바인딩 실패"
+            raise OSError(f"19090 ~ 19190 포트 대역 중 사용 가능한 네트워크 포트를 찾을 수 없거나 방화벽/백신에 의해 바인딩이 차단되었습니다. 상세 오류: {err_msg}")
             
         self.server_thread = threading.Thread(target=self._run_server, daemon=True)
         self.server_thread.start()
         self.started.emit()
+        
+        # Verify if the server is actually up and responding via self-ping
+        threading.Thread(target=self.verify_self_ping, daemon=True).start()
         
     def _run_server(self):
         try:
@@ -101,6 +150,21 @@ class CooldownServer(QObject):
                     f.write(f"Server Run Error: {str(e)}\n{traceback.format_exc()}\n")
             except Exception:
                 pass
+                
+    def verify_self_ping(self):
+        time.sleep(0.3)
+        url = f"http://127.0.0.1:{self.port}/status"
+        proxy_support = urllib.request.ProxyHandler({})
+        opener = urllib.request.build_opener(proxy_support)
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with opener.open(req, timeout=1.5) as res:
+                res.read()
+            with open("server_running.log", "w", encoding="utf-8") as f:
+                f.write(f"[SUCCESS] Server is successfully running at http://127.0.0.1:{self.port} (0.0.0.0 binding)\n")
+        except Exception as e:
+            with open("server_running.log", "w", encoding="utf-8") as f:
+                f.write(f"[FAIL] Self-ping failed at {url}. Error: {str(e)}\n")
             
     def stop(self):
         if self.httpd:
