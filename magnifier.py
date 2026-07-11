@@ -149,16 +149,16 @@ LUCIDE_PENGUIN_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150
   <path d="m47.4 118c0.5 4.4 2 7.4 4.2 10 2.5 1 9.4 3.9 23.1 4.1 10.3 0 19.4-1.5 23.7-3.6 2-2.5 3.6-5.5 4-10.3-4.4 2.9-12.9 7.4-27.2 7.5-11.8 0-21.2-3.1-27.8-7.7z" fill="url(#SVGID_10_)"/>
 </svg>"""
 
-# Server Hosting (Host) & Client Link (Join) SVG Icons
+# Server Hosting (Host) & Client Link (Join) SVG Icons (Removed explicit width/height to avoid half-cut clipping)
 LUCIDE_HOST_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0a84ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-radio">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#0a84ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
   <circle cx="12" cy="12" r="2"/>
   <path d="M16.2 7.8a6 6 0 0 1 0 8.4m3.6-12a11 11 0 0 1 0 15.6M7.8 16.2a6 6 0 0 1 0-8.4M4.2 19.8a11 11 0 0 1 0-15.6"/>
 </svg>
 """
 
 LUCIDE_JOIN_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#30d158" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-link-2">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#30d158" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
   <path d="M9 17H7A5 5 0 0 1 7 7h2m6 10h2a5 5 0 0 0 0-10h-2m-7 5h8"/>
 </svg>
 """
@@ -174,6 +174,20 @@ def get_svg_icon(svg_str):
         return QIcon(pixmap)
     except Exception:
         return QIcon()
+
+# Dynamic renderer helper that guarantees no border half-cuts by drawing directly inside a clean QPixmap with anti-aliasing
+def get_svg_pixmap(svg_str, size=18):
+    try:
+        renderer = QSvgRenderer(QByteArray(svg_str.encode('utf-8')))
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        renderer.render(painter)
+        painter.end()
+        return pixmap
+    except Exception:
+        return QPixmap()
 
 # Win32 helper to force system taskbar icon updates via SendMessageW using in-memory SVG to HICON
 def force_set_window_icon(hwnd):
@@ -690,7 +704,9 @@ class SettingsModal(QDialog):
         host_title_lay.setSpacing(6)
         host_icon = QLabel()
         host_icon.setFixedSize(18, 18)
-        host_icon.setPixmap(get_svg_icon(LUCIDE_HOST_SVG).pixmap(18, 18))
+        # Use new custom pixmap logic to guarantee Lucide icons render fully without cutoff
+        host_icon.setPixmap(get_svg_pixmap(LUCIDE_HOST_SVG, 18))
+        
         host_lbl = QLabel("<b>중계 방 만들기 (Host)</b>")
         host_lbl.setStyleSheet("color: #0a84ff; font-size: 14px; font-weight: 600; border: none; background: transparent;")
         host_title_lay.addWidget(host_icon)
@@ -740,7 +756,9 @@ class SettingsModal(QDialog):
         guest_title_lay.setSpacing(6)
         guest_icon = QLabel()
         guest_icon.setFixedSize(18, 18)
-        guest_icon.setPixmap(get_svg_icon(LUCIDE_JOIN_SVG).pixmap(18, 18))
+        # Use new custom pixmap logic to guarantee Lucide icons render fully without cutoff
+        guest_icon.setPixmap(get_svg_pixmap(LUCIDE_JOIN_SVG, 18))
+        
         guest_lbl = QLabel("<b>대기실 접속하기 (Join)</b>")
         guest_lbl.setStyleSheet("color: #30d158; font-size: 14px; font-weight: 600; border: none; background: transparent;")
         guest_title_lay.addWidget(guest_icon)
@@ -1734,14 +1752,14 @@ class MagnifierWindow(QMainWindow):
         if self.client_running and self.client:
             self.client.send_update(name, is_ready)
 
-    # Server hosting control
+    # Server hosting control (uses show_dark_message_box for gorgeous contrast popup)
     def start_party_server(self):
         try:
             self.server = network_manager.CooldownServer()
             self.server.start()
             self.server_running = True
         except Exception as e:
-            QMessageBox.critical(self, "서버 오류", f"대기실 서버 가동 중 오류가 발생했습니다:\n{str(e)}")
+            show_dark_message_box(self, "서버 오류", f"대기실 서버 가동 중 오류가 발생했습니다:\n{str(e)}", QMessageBox.Icon.Critical)
 
     def stop_party_server(self):
         if self.server:
@@ -1752,7 +1770,7 @@ class MagnifierWindow(QMainWindow):
             self.server = None
         self.server_running = False
 
-    # Client networking control
+    # Client networking control (uses show_dark_message_box for gorgeous contrast popup)
     def start_party_client(self):
         try:
             self.client = network_manager.CooldownClient(
@@ -1763,7 +1781,7 @@ class MagnifierWindow(QMainWindow):
             self.client.start()
             self.client_running = True
         except Exception as e:
-            QMessageBox.critical(self, "접속 오류", f"대기실 접속 시도 중 오류가 발생했습니다:\n{str(e)}")
+            show_dark_message_box(self, "접속 오류", f"대기실 접속 시도 중 오류가 발생했습니다:\n{str(e)}", QMessageBox.Icon.Critical)
 
     def stop_party_client(self):
         if self.client:
@@ -1854,7 +1872,7 @@ class MagnifierWindow(QMainWindow):
             self.resume_listeners()
         except Exception as e:
             err_msg = f"설정 창 실행 중 예외가 발생했습니다:\n{str(e)}\n\n{traceback.format_exc()}"
-            QMessageBox.critical(self, "설정 오류", err_msg)
+            show_dark_message_box(self, "설정 오류", err_msg, QMessageBox.Icon.Critical)
             self.resume_listeners()
 
     def show_help(self):
@@ -1865,7 +1883,7 @@ class MagnifierWindow(QMainWindow):
             self.resume_listeners()
         except Exception as e:
             err_msg = f"도움말 창 실행 중 예외가 발생했습니다:\n{str(e)}\n\n{traceback.format_exc()}"
-            QMessageBox.critical(self, "도움말 오류", err_msg)
+            show_dark_message_box(self, "도움말 오류", err_msg, QMessageBox.Icon.Critical)
             self.resume_listeners()
 
     def update_magnifier(self):
