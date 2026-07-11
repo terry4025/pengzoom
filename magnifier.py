@@ -5,9 +5,11 @@ import mss
 import numpy as np
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, 
                              QHBoxLayout, QWidget, QFrame, QPushButton, QSlider, 
-                             QDialog, QSizeGrip, QSizePolicy)
+                             QDialog, QSizeGrip, QSizePolicy, QGridLayout)
 from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject
-from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon
+from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence
+from PyQt6.QtSvg import QSvgRenderer
+from PyQt6.QtCore import QByteArray
 from PIL import Image
 from pynput import mouse, keyboard
 
@@ -24,6 +26,14 @@ GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
 
+# Lucide Settings Icon SVG Data (stroke-width: 2.5, Green color representation)
+LUCIDE_SETTINGS_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#30d158" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings">
+  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+  <circle cx="12" cy="12" r="3"/>
+</svg>
+"""
+
 def get_icon_path():
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, "icon2.ico")
@@ -35,23 +45,38 @@ def get_icon_path():
         return "icon2.ico"
     return ""
 
+def get_svg_icon(svg_str):
+    try:
+        renderer = QSvgRenderer(QByteArray(svg_str.encode('utf-8')))
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        return QIcon(pixmap)
+    except Exception:
+        return QIcon()
+
 class InputBridge(QObject):
     zoom_changed = pyqtSignal(int)
     toggle_follow = pyqtSignal()
     toggle_click_through = pyqtSignal()
     toggle_hide = pyqtSignal()
-    hotkey_set = pyqtSignal(str)
 
 class SettingsModal(QDialog):
-    def __init__(self, current_hotkey, bridge, parent=None):
-        super().__init__(parent)
+    def __init__(self, parent_window):
+        super().__init__(parent_window)
+        self.parent_window = parent_window
         self.setWindowTitle("설정")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        self.current_hotkey = current_hotkey
-        self.bridge = bridge
-        self.is_setting_hotkey = False
+        self.is_setting_target = None
+        
+        # Load temporary values from parent window
+        self.temp_follow = parent_window.hotkey_follow
+        self.temp_transparent = parent_window.hotkey_transparent
+        self.temp_hide = parent_window.hotkey_hide
         
         self.setStyleSheet("""
             #ModalContainer {
@@ -68,8 +93,8 @@ class SettingsModal(QDialog):
                 color: #ffffff;
                 border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 12px;
-                padding: 8px 16px;
-                font-size: 13px;
+                padding: 6px 14px;
+                font-size: 12px;
                 font-weight: 500;
             }
             QPushButton:hover {
@@ -102,74 +127,157 @@ class SettingsModal(QDialog):
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         container_layout.addWidget(title_label)
         
-        # Hotkey Configuration Section
-        hotkey_group = QHBoxLayout()
-        hotkey_label = QLabel("따라오기 단축키:")
-        hotkey_label.setStyleSheet("font-size: 13px; color: #cccccc;")
-        hotkey_group.addWidget(hotkey_label)
+        # Grid layout for hotkey configurations
+        grid = QGridLayout()
+        grid.setSpacing(10)
         
-        display_key = self.current_hotkey if self.current_hotkey else "Ctrl+MiddleClick"
-        self.hotkey_btn = QPushButton(display_key)
-        self.hotkey_btn.clicked.connect(self.start_setting)
-        hotkey_group.addWidget(self.hotkey_btn)
-        container_layout.addLayout(hotkey_group)
+        # 1. Follow Mouse Hotkey
+        lbl_follow = QLabel("마우스 따라오기:")
+        lbl_follow.setStyleSheet("font-size: 13px; color: #cccccc;")
+        self.btn_follow = QPushButton(self.get_display_text(self.temp_follow, "Ctrl+MiddleClick"))
+        self.btn_follow.clicked.connect(lambda: self.start_setting("follow", self.btn_follow))
+        grid.addWidget(lbl_follow, 0, 0)
+        grid.addWidget(self.btn_follow, 0, 1)
         
-        # Info text
-        info_label = QLabel("※ 변경 버튼을 누른 뒤 원하는 단축키 조합(예: Ctrl+F1)을 누르세요. 마우스 휠 클릭 단축키로 돌리려면 단축키가 변경 중일 때 ESC 키를 누르거나 초기화하십시오.")
-        info_label.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.5); line-height: 1.4;")
+        # 2. Transparent (Click-through) Hotkey
+        lbl_trans = QLabel("마우스 투과 토글:")
+        lbl_trans.setStyleSheet("font-size: 13px; color: #cccccc;")
+        self.btn_transparent = QPushButton(self.get_display_text(self.temp_transparent, "Ctrl+Alt+T"))
+        self.btn_transparent.clicked.connect(lambda: self.start_setting("transparent", self.btn_transparent))
+        grid.addWidget(lbl_trans, 1, 0)
+        grid.addWidget(self.btn_transparent, 1, 1)
+        
+        # 3. Minimize Window Hotkey
+        lbl_hide = QLabel("최소화(가리기) 토글:")
+        lbl_hide.setStyleSheet("font-size: 13px; color: #cccccc;")
+        self.btn_hide = QPushButton(self.get_display_text(self.temp_hide, "Ctrl+Alt+H"))
+        self.btn_hide.clicked.connect(lambda: self.start_setting("hide", self.btn_hide))
+        grid.addWidget(lbl_hide, 2, 0)
+        grid.addWidget(self.btn_hide, 2, 1)
+        
+        container_layout.addLayout(grid)
+        
+        # Info label
+        info_label = QLabel("※ 변경할 버튼을 클릭한 뒤, 키보드 단축키 조합을 입력하십시오. ESC를 누르면 단축키를 해제하고 마우스 기본 휠 클릭으로 리셋합니다.")
+        info_label.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.45); line-height: 1.4;")
         info_label.setWordWrap(True)
         container_layout.addWidget(info_label)
         
-        # Action Buttons
+        # Bottom Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         
         self.reset_btn = QPushButton("기본값 초기화")
-        self.reset_btn.clicked.connect(self.reset_to_default)
+        self.reset_btn.clicked.connect(self.reset_all)
         btn_layout.addWidget(self.reset_btn)
         
         self.save_btn = QPushButton("확인")
         self.save_btn.setObjectName("SaveBtn")
-        self.save_btn.clicked.connect(self.accept)
+        self.save_btn.clicked.connect(self.save_and_close)
         btn_layout.addWidget(self.save_btn)
         
         container_layout.addLayout(btn_layout)
         layout.addWidget(container)
-        self.resize(320, 220)
         
+        self.resize(350, 260)
         self.old_pos = None
-        self.bridge.hotkey_set.connect(self.on_hotkey_updated)
-        
-    def start_setting(self):
-        self.is_setting_hotkey = True
-        self.hotkey_btn.setText("키 입력 대기 중...")
-        self.hotkey_btn.setStyleSheet("background-color: rgba(255, 214, 10, 0.2); color: #ffd60a; border: 1px solid rgba(255, 214, 10, 0.4);")
-        if self.parent():
-            self.parent().is_setting_hotkey = True
 
-    def on_hotkey_updated(self, key_name):
-        self.current_hotkey = key_name
-        self.hotkey_btn.setText(key_name)
-        self.hotkey_btn.setStyleSheet("")
-        self.is_setting_hotkey = False
-        if self.parent():
-            self.parent().is_setting_hotkey = False
-            self.parent().custom_hotkey = key_name
-            
-    def reset_to_default(self):
-        self.current_hotkey = None
-        self.hotkey_btn.setText("Ctrl+MiddleClick")
-        self.hotkey_btn.setStyleSheet("")
-        self.is_setting_hotkey = False
-        if self.parent():
-            self.parent().is_setting_hotkey = False
-            self.parent().custom_hotkey = None
+    def get_display_text(self, value, default_text):
+        return value if value else default_text
+
+    def start_setting(self, target, button):
+        self.is_setting_target = target
+        # Reset styles on other buttons
+        self.btn_follow.setStyleSheet("")
+        self.btn_transparent.setStyleSheet("")
+        self.btn_hide.setStyleSheet("")
+        
+        button.setText("키 입력 대기 중...")
+        button.setStyleSheet("background-color: rgba(255, 214, 10, 0.2); color: #ffd60a; border: 1px solid rgba(255, 214, 10, 0.4);")
+
+    def reset_all(self):
+        self.temp_follow = None
+        self.temp_transparent = "Ctrl+Alt+T"
+        self.temp_hide = "Ctrl+Alt+H"
+        
+        self.btn_follow.setText("Ctrl+MiddleClick")
+        self.btn_transparent.setText("Ctrl+Alt+T")
+        self.btn_hide.setText("Ctrl+Alt+H")
+        
+        self.btn_follow.setStyleSheet("")
+        self.btn_transparent.setStyleSheet("")
+        self.btn_hide.setStyleSheet("")
+        self.is_setting_target = None
+
+    def save_and_close(self):
+        # Save temporary values to parent window
+        self.parent_window.hotkey_follow = self.temp_follow
+        self.parent_window.hotkey_transparent = self.temp_transparent
+        self.parent_window.hotkey_hide = self.temp_hide
+        self.accept()
 
     def keyPressEvent(self, event):
-        if self.is_setting_hotkey and event.key() == Qt.Key.Key_Escape:
-            self.reset_to_default()
+        if self.is_setting_target is not None:
+            # Capture hotkeys from event
+            modifiers = []
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                modifiers.append("Ctrl")
+            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                modifiers.append("Alt")
+            
+            key = event.key()
+            if key in [Qt.Key.Key_Control, Qt.Key.Key_Alt, Qt.Key.Key_Shift, Qt.Key.Key_Meta]:
+                event.accept()
+                return
+                
+            # If ESC is pressed, reset key assignment
+            if key == Qt.Key.Key_Escape:
+                if self.is_setting_target == 'follow':
+                    self.temp_follow = None
+                    self.btn_follow.setText("Ctrl+MiddleClick")
+                elif self.is_setting_target == 'transparent':
+                    self.temp_transparent = None
+                    self.btn_transparent.setText("사용 안 함")
+                elif self.is_setting_target == 'hide':
+                    self.temp_hide = None
+                    self.btn_hide.setText("사용 안 함")
+                
+                # Reset styles
+                self.btn_follow.setStyleSheet("")
+                self.btn_transparent.setStyleSheet("")
+                self.btn_hide.setStyleSheet("")
+                self.is_setting_target = None
+                event.accept()
+                return
+                
+            # Parse normal keys
+            key_name = QKeySequence(key).toString().upper()
+            if not key_name:
+                event.accept()
+                return
+                
+            combo = modifiers + [key_name]
+            final_hotkey = "+".join(combo)
+            
+            if self.is_setting_target == 'follow':
+                self.temp_follow = final_hotkey
+                self.btn_follow.setText(final_hotkey)
+            elif self.is_setting_target == 'transparent':
+                self.temp_transparent = final_hotkey
+                self.btn_transparent.setText(final_hotkey)
+            elif self.is_setting_target == 'hide':
+                self.temp_hide = final_hotkey
+                self.btn_hide.setText(final_hotkey)
+                
+            # Reset button styles
+            self.btn_follow.setStyleSheet("")
+            self.btn_transparent.setStyleSheet("")
+            self.btn_hide.setStyleSheet("")
+            self.is_setting_target = None
             event.accept()
-        elif event.key() == Qt.Key.Key_Escape:
+            return
+            
+        if event.key() == Qt.Key.Key_Escape:
             self.reject()
         else:
             super().keyPressEvent(event)
@@ -238,13 +346,14 @@ class HelpModal(QDialog):
         content_label = QLabel(
             "<b>주요 단축키 및 조작법</b><br><br>"
             "1. <b>확대/축소</b>: <span style='color: #0088ff;'>Ctrl + 마우스 휠</span><br>"
-            "2. <b>따라오기 토글</b>: <span style='color: #0088ff;'>Ctrl + 휠 클릭</span> (또는 지정된 키)<br>"
+            "2. <b>따라오기 토글</b>: <span style='color: #0088ff;'>Ctrl + 휠 클릭</span> (또는 설정 단축키)<br>"
             "3. <b>영역 지정</b>: [영역 지정] 클릭 후 화면 드래그<br>"
             "4. <b>투명도 설정</b>: 하단 투명도 슬라이더 사용 (15% ~ 100%)<br>"
-            "5. <b>마우스 투과 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + T</span><br>"
+            "5. <b>마우스 투과 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + T</span> (또는 설정 단축키)<br>"
             "   <i>※ 투과 모드가 켜지면 마우스 클릭이 창을 통과해 뒤쪽 게임을 조작할 수 있습니다. 다시 일반 모드로 돌아오려면 단축키를 누르세요.</i><br>"
-            "6. <b>프로그램 최소화 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + H</span> 또는 상단 최소화 [─] 버튼<br>"
-            "7. <b>프로그램 종료</b>: ✕ 버튼 또는 ESC 키"
+            "6. <b>프로그램 최소화 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + H</span> (또는 설정 단축키) 또는 상단 최소화 [─] 버튼<br>"
+            "7. <b>프로그램 설정</b>: 상단 [⚙] 버튼 클릭<br>"
+            "8. <b>프로그램 종료</b>: [X] 버튼 또는 ESC 키"
         )
         content_label.setStyleSheet("font-size: 13px; line-height: 1.5; color: #cccccc;")
         content_label.setWordWrap(True)
@@ -259,7 +368,7 @@ class HelpModal(QDialog):
         container_layout.addLayout(btn_layout)
         
         layout.addWidget(container)
-        self.resize(340, 380)
+        self.resize(340, 400)
         self.old_pos = None
         
     def mousePressEvent(self, event):
@@ -357,7 +466,10 @@ class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('펭구 줌인 Pro v2.0')
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        # Add Qt.WindowType.Window to force taskbar icon grouping and generation in Windows OS
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
+                            Qt.WindowType.WindowStaysOnTopHint | 
+                            Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
         # Load window icon
@@ -376,7 +488,6 @@ class MagnifierWindow(QMainWindow):
         self.bridge.toggle_follow.connect(self.toggle_follow)
         self.bridge.toggle_click_through.connect(self.toggle_click_through)
         self.bridge.toggle_hide.connect(self.toggle_hide_mode)
-        self.bridge.hotkey_set.connect(self.on_hotkey_set)
         
         self.ctrl_pressed = False
         self.alt_pressed = False
@@ -420,14 +531,20 @@ class MagnifierWindow(QMainWindow):
                     data = json.load(f)
                     self.zoom_factor = data.get('zoom_factor', 2.0)
                     self.opacity_value = data.get('opacity', 100)
-                    self.custom_hotkey = data.get('custom_hotkey', None)
+                    
+                    self.hotkey_follow = data.get('hotkey_follow', None)
+                    self.hotkey_transparent = data.get('hotkey_transparent', "Ctrl+Alt+T")
+                    self.hotkey_hide = data.get('hotkey_hide', "Ctrl+Alt+H")
                     return
             except Exception:
                 pass
+        
         # Default fallback settings
         self.zoom_factor = 2.0
         self.opacity_value = 100
-        self.custom_hotkey = None
+        self.hotkey_follow = None
+        self.hotkey_transparent = "Ctrl+Alt+T"
+        self.hotkey_hide = "Ctrl+Alt+H"
 
     def save_settings(self):
         config_path = self.get_config_path()
@@ -435,7 +552,9 @@ class MagnifierWindow(QMainWindow):
             data = {
                 'zoom_factor': self.zoom_factor,
                 'opacity': self.opacity_slider.value(),
-                'custom_hotkey': self.custom_hotkey
+                'hotkey_follow': self.hotkey_follow,
+                'hotkey_transparent': self.hotkey_transparent,
+                'hotkey_hide': self.hotkey_hide
             }
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
@@ -473,45 +592,53 @@ class MagnifierWindow(QMainWindow):
             QPushButton.PrimaryActive:hover {
                 background-color: #0071e3;
             }
+            
+            /* High-contrast Apple Window Controls styles */
+            QPushButton#MinimizeBtn {
+                background-color: rgba(255, 214, 10, 0.2);
+                color: #ffd60a;
+                border: 1px solid rgba(255, 214, 10, 0.3);
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton#MinimizeBtn:hover {
+                background-color: rgba(255, 214, 10, 0.35);
+            }
+            
+            QPushButton#SettingsBtn {
+                background-color: rgba(48, 209, 88, 0.2);
+                border: 1px solid rgba(48, 209, 88, 0.3);
+                border-radius: 12px;
+            }
+            QPushButton#SettingsBtn:hover {
+                background-color: rgba(48, 209, 88, 0.35);
+            }
+            
+            QPushButton#HelpBtn {
+                background-color: rgba(10, 132, 255, 0.2);
+                color: #0a84ff;
+                border: 1px solid rgba(10, 132, 255, 0.3);
+                border-radius: 12px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton#HelpBtn:hover {
+                background-color: rgba(10, 132, 255, 0.35);
+            }
+            
             QPushButton#CloseBtn {
                 background-color: rgba(255, 69, 58, 0.2);
                 color: #ff453a;
                 border: 1px solid rgba(255, 69, 58, 0.3);
                 border-radius: 12px;
                 font-size: 11px;
+                font-weight: bold;
             }
             QPushButton#CloseBtn:hover {
                 background-color: rgba(255, 69, 58, 0.35);
             }
-            QPushButton#HelpBtn {
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 12px;
-                font-size: 12px;
-            }
-            QPushButton#HelpBtn:hover {
-                background-color: rgba(255, 255, 255, 0.16);
-            }
-            QPushButton#MinimizeBtn {
-                background-color: rgba(255, 214, 10, 0.2);
-                color: #ffd60a;
-                border: 1px solid rgba(255, 214, 10, 0.3);
-                border-radius: 12px;
-                font-size: 10px;
-                font-weight: bold;
-            }
-            QPushButton#MinimizeBtn:hover {
-                background-color: rgba(255, 214, 10, 0.35);
-            }
-            QPushButton#SettingsBtn {
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 12px;
-                font-size: 13px;
-            }
-            QPushButton#SettingsBtn:hover {
-                background-color: rgba(255, 255, 255, 0.16);
-            }
+            
             QSlider::groove:horizontal {
                 height: 6px;
                 background: rgba(255, 255, 255, 0.12);
@@ -555,15 +682,17 @@ class MagnifierWindow(QMainWindow):
         self.title_layout.addStretch()
         
         # Top-right button cluster (Minimize, Settings, Help, Close) all as 24x24 circular buttons
-        self.minimize_btn = QPushButton('─')
+        self.minimize_btn = QPushButton('-')  # Standard keyboard minus key to prevent unicode render errors
         self.minimize_btn.setObjectName('MinimizeBtn')
         self.minimize_btn.setFixedSize(24, 24)
         self.minimize_btn.clicked.connect(self.showMinimized)
         self.title_layout.addWidget(self.minimize_btn)
         
-        self.settings_btn = QPushButton('⚙')
+        # Lucide settings icon SVG loaded cleanly
+        self.settings_btn = QPushButton()
         self.settings_btn.setObjectName('SettingsBtn')
         self.settings_btn.setFixedSize(24, 24)
+        self.settings_btn.setIcon(get_svg_icon(LUCIDE_SETTINGS_SVG))
         self.settings_btn.clicked.connect(self.show_settings)
         self.title_layout.addWidget(self.settings_btn)
         
@@ -573,7 +702,7 @@ class MagnifierWindow(QMainWindow):
         self.help_btn.clicked.connect(self.show_help)
         self.title_layout.addWidget(self.help_btn)
         
-        self.close_btn = QPushButton('✕')
+        self.close_btn = QPushButton('X')  # Standard keyboard capital X to prevent unicode render errors
         self.close_btn.setObjectName('CloseBtn')
         self.close_btn.setFixedSize(24, 24)
         self.close_btn.clicked.connect(self.close)
@@ -581,7 +710,7 @@ class MagnifierWindow(QMainWindow):
         
         self.main_layout.addLayout(self.title_layout)
         
-        # Row for Click-Through Toggle (occupies full width since hotkey button is removed)
+        # Row for Click-Through Toggle
         self.config_layout = QHBoxLayout()
         self.config_layout.setSpacing(8)
         
@@ -642,16 +771,34 @@ class MagnifierWindow(QMainWindow):
         self.main_layout.addLayout(self.sliders_layout)
 
     def show_settings(self):
-        modal = SettingsModal(self.custom_hotkey, self.bridge, self)
+        modal = SettingsModal(self)
         modal.exec()
 
     def start_setting_hotkey(self):
-        # Triggered from settings modal
         self.is_setting_hotkey = True
 
     def on_hotkey_set(self, key_name):
-        self.custom_hotkey = key_name
-        self.is_setting_hotkey = False
+        # Relayed signal from SettingsModal
+        pass
+
+    def check_hotkey_match(self, parsed_parts, current_key_name, is_t_key, is_h_key):
+        target_key = parsed_parts[-1].lower()
+        req_ctrl = 'ctrl' in parsed_parts
+        req_alt = 'alt' in parsed_parts
+        
+        # Modifier status match
+        if self.ctrl_pressed != req_ctrl or self.alt_pressed != req_alt:
+            return False
+            
+        # Key code match
+        if target_key == 't' and is_t_key:
+            return True
+        if target_key == 'h' and is_h_key:
+            return True
+        if current_key_name == target_key:
+            return True
+            
+        return False
 
     def on_key_press(self, key):
         if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
@@ -663,14 +810,13 @@ class MagnifierWindow(QMainWindow):
             if hasattr(key, 'char') and key.char:
                 current_key_name = key.char.lower()
             else:
-                current_key_name = str(key).replace('Key.', '')
+                current_key_name = str(key).replace('Key.', '').lower()
         except Exception:
-            current_key_name = str(key)
+            current_key_name = str(key).lower()
             
-        # Detect physical key index for 'T' (vkcode: 84) and 'H' (vkcode: 72)
+        # Detect physical vk codes for T and H
         is_t_key = False
         is_h_key = False
-        
         if hasattr(key, 'vk'):
             if key.vk == 84:
                 is_t_key = True
@@ -682,34 +828,44 @@ class MagnifierWindow(QMainWindow):
         if not is_h_key and current_key_name in ['h', 'ㅗ']:
             is_h_key = True
 
-        if is_t_key and self.ctrl_pressed and self.alt_pressed:
-            self.bridge.toggle_click_through.emit()
-            return
-            
-        if is_h_key and self.ctrl_pressed and self.alt_pressed:
-            self.bridge.toggle_hide.emit()
-            return
-
+        # Send Key events directly to SettingsModal if it's capturing keys
         if self.is_setting_hotkey:
-            if current_key_name in ['ctrl_l', 'ctrl_r', 'alt_l', 'alt_r', 'shift', 'shift_r', 'cmd']:
-                return
             combo = []
             if self.ctrl_pressed:
                 combo.append('Ctrl')
             if self.alt_pressed:
                 combo.append('Alt')
-            combo.append(current_key_name.upper())
+            
+            # Map clean key names
+            btn_key = current_key_name.upper()
+            if btn_key in ['CTRL_L', 'CTRL_R', 'ALT_L', 'ALT_R', 'SHIFT', 'SHIFT_R', 'CMD']:
+                return
+            
+            combo.append(btn_key)
             final_hotkey = '+'.join(combo)
             self.bridge.hotkey_set.emit(final_hotkey)
             return
-            
-        if self.custom_hotkey:
-            parts = self.custom_hotkey.split('+')
-            target_key = parts[-1].lower()
-            req_ctrl = 'Ctrl' in parts
-            req_alt = 'Alt' in parts
-            if current_key_name == target_key and self.ctrl_pressed == req_ctrl and self.alt_pressed == req_alt:
+
+        # 1. Match Click-Through Hotkey (Default: Ctrl+Alt+T)
+        if self.hotkey_transparent:
+            parts = [p.lower() for p in self.hotkey_transparent.split('+')]
+            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
+                self.bridge.toggle_click_through.emit()
+                return
+
+        # 2. Match Minimize Toggle Hotkey (Default: Ctrl+Alt+H)
+        if self.hotkey_hide:
+            parts = [p.lower() for p in self.hotkey_hide.split('+')]
+            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
+                self.bridge.toggle_hide.emit()
+                return
+
+        # 3. Match Follow Mouse Hotkey (Default: None/Disabled)
+        if self.hotkey_follow:
+            parts = [p.lower() for p in self.hotkey_follow.split('+')]
+            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
                 self.bridge.toggle_follow.emit()
+                return
 
     def on_key_release(self, key):
         if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
@@ -724,7 +880,8 @@ class MagnifierWindow(QMainWindow):
     def on_global_click(self, x, y, button, pressed):
         if not pressed:
             return
-        if self.custom_hotkey is None:
+        # If hotkey follow is None (default), use Ctrl+MiddleClick fallback
+        if self.hotkey_follow is None:
             if button == mouse.Button.middle and self.ctrl_pressed:
                 self.bridge.toggle_follow.emit()
 
@@ -788,14 +945,12 @@ class MagnifierWindow(QMainWindow):
             
         # Apply style change directly to native window without re-creating window (Fixes window flickers!)
         ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
-        # Force frame update immediately to apply EXSTYLE without hide/show (SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE = 0x0037)
         ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)
         
         self.click_through_btn.style().unpolish(self.click_through_btn)
         self.click_through_btn.style().polish(self.click_through_btn)
 
     def toggle_hide_mode(self):
-        # Global hotkey Ctrl+Alt+H toggles minimized state
         if self.isMinimized():
             self.showNormal()
             self.activateWindow()
@@ -879,9 +1034,7 @@ class MagnifierWindow(QMainWindow):
             self.close()
 
     def closeEvent(self, event):
-        # Auto-save settings on close
         self.save_settings()
-        
         self.mouse_listener.stop()
         self.key_listener.stop()
         super().closeEvent(event)
