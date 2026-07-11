@@ -991,6 +991,7 @@ class HelpModal(QDialog):
 
 class SelectionOverlay(QWidget):
     areaSelected = pyqtSignal(QRect)
+    closed = pyqtSignal()  # Explicitly signal when window closes to restore parent key listener without destroyed lag
 
     def __init__(self):
         super().__init__()
@@ -1047,6 +1048,10 @@ class SelectionOverlay(QWidget):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
             self.close()
+
+    def closeEvent(self, event):
+        self.closed.emit()
+        super().closeEvent(event)
 
 class ResizableContainer(QFrame):
     def __init__(self, parent=None):
@@ -1452,6 +1457,10 @@ class MagnifierWindow(QMainWindow):
             self.container.grip.hide()
             # Remove live image frame border/radius to blend perfectly with background
             self.label.setStyleSheet('border-radius: 0px; background-color: #000000; border: none;')
+            
+            # Allow window to scale down dynamically to ultra-small size for minimalist HUD overlay
+            self.setMinimumSize(30, 30)
+            self.label.setMinimumSize(30, 30)
         else:
             # Restore round corners, outer border frame and resize grip
             self.container.setStyleSheet("""
@@ -1464,12 +1473,16 @@ class MagnifierWindow(QMainWindow):
             self.main_layout.setContentsMargins(16, 16, 16, 16)
             self.container.grip.show()
             self.label.setStyleSheet('border-radius: 12px; background-color: #000000; border: 1px solid rgba(255, 255, 255, 0.1);')
+            
+            # Enforce larger minimum size in settings mode to layout elements nicely
+            self.setMinimumSize(250, 300)
+            self.label.setMinimumSize(100, 100)
 
     def start_selection(self):
         self.pause_listeners()
         self.selection_overlay = SelectionOverlay()
         self.selection_overlay.areaSelected.connect(self.on_area_selected)
-        self.selection_overlay.destroyed.connect(self.resume_listeners)
+        self.selection_overlay.closed.connect(self.resume_listeners)
         self.selection_overlay.show()
 
     def start_cooldown_area_capture(self, skill_name, config_dialog):
@@ -1479,7 +1492,7 @@ class MagnifierWindow(QMainWindow):
         self.pause_listeners()
         self.overlay = SelectionOverlay()
         self.overlay.areaSelected.connect(self.on_cooldown_area_captured)
-        self.overlay.destroyed.connect(self.resume_listeners)
+        self.overlay.closed.connect(self.resume_listeners)
         self.overlay.show()
 
     def on_cooldown_area_captured(self, rect):
