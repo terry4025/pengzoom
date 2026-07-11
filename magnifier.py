@@ -1727,7 +1727,7 @@ class MagnifierWindow(QMainWindow):
             self.label.setStyleSheet('border-radius: 12px; background-color: #000000; border: 1px solid rgba(255, 255, 255, 0.1);')
             
             # 6. Restore original window size
-            self.resize(target_size)
+            self.resize(target_size.width(), target_size.height())
             
             # 7. Auto position correct: calculate restored margins offset and move window to prevent graphic displacement
             new_label_global = self.label.mapToGlobal(QPoint(0, 0))
