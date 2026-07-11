@@ -624,7 +624,7 @@ class SettingsModal(QDialog):
         self.chk_hide_ui_on_transparent.setChecked(self.parent_window.hide_ui_on_transparent)
         lay.addWidget(self.chk_hide_ui_on_transparent)
         
-        info = QLabel("※ 단축키 지정 대기 상태에서 ESC를 누르면 마우스 기본 설정(휠 클릭 리셋 등)으로 해제 처리됩니다. 투과 UI 숨기기 옵션을 켜면, 마우스 투과 상태에서 버튼과 슬라이더 영역이 자동 가려져 깔끔한 화면만 떠있게 됩니다.")
+        info = QLabel("※ 단축키 지정 대기 상태에서 ESC를 누르면 마우스 기본 설정(휠 클릭 리셋 등)으로 해제됨 애옹! 투과 UI 숨기기 옵션을 켜면, 마우스 투과 상태에서 버튼이랑 슬라이더 영역이 자동 가려져 깔끔한 화면만 떠있게 됨 애옹!")
         info.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.4); line-height: 1.4;")
         info.setWordWrap(True)
         lay.addWidget(info)
