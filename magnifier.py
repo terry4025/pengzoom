@@ -1446,7 +1446,10 @@ class MagnifierWindow(QMainWindow):
         should_hide = self.click_through and self.hide_ui_on_transparent
         
         if should_hide:
-            # 1. Capture the exact dimensions self.label had before hiding layouts
+            # 1. Capture the exact dimensions and screen coordinates self.label has BEFORE hiding layout
+            global_pos = self.label.mapToGlobal(QPoint(0, 0))
+            self.last_normal_size = self.size()
+            
             w = max(30, self.label.width())
             h = max(30, self.label.height())
             
@@ -1469,20 +1472,27 @@ class MagnifierWindow(QMainWindow):
             self.setMinimumSize(30, 30)
             self.label.setMinimumSize(30, 30)
             self.resize(w, h)
-        else:
-            # 1. Capture dimensions self.label has right now
-            w = max(30, self.label.width())
-            h = max(30, self.label.height())
             
-            # 2. Restore larger minimum size constraints for settings mode to prevent overlaps
+            # 5. Relocate window so that the borderless zoom label aligns precisely to its original position
+            self.move(global_pos)
+        else:
+            # 1. Capture the current global screen coordinates of the label
+            global_pos = self.label.mapToGlobal(QPoint(0, 0))
+            
+            # 2. Retrieve previously stored size to restore exactly what the user size adjusted
+            target_size = getattr(self, 'last_normal_size', None)
+            if target_size is None or target_size.width() < 100 or target_size.height() < 100:
+                target_size = QPoint(420, 540)
+            
+            # 3. Restore larger minimum size constraints for settings mode to prevent overlaps
             self.setMinimumSize(250, 300)
             self.label.setMinimumSize(100, 100)
             
-            # 3. Toggle control bar widgets visibility
+            # 4. Toggle control bar widgets visibility
             self.top_control_widget.setVisible(True)
             self.bottom_control_widget.setVisible(True)
             
-            # 4. Restore round corners, outer border frame and resize grip
+            # 5. Restore round corners, outer border frame and resize grip
             self.container.setStyleSheet("""
                 #MainContainer {
                     background-color: rgba(28, 28, 30, 0.90);
@@ -1494,8 +1504,14 @@ class MagnifierWindow(QMainWindow):
             self.container.grip.show()
             self.label.setStyleSheet('border-radius: 12px; background-color: #000000; border: 1px solid rgba(255, 255, 255, 0.1);')
             
-            # 5. Smart resize: increase window to account for the restored control bars and padding
-            self.resize(max(420, w + 32), max(540, h + 160))
+            # 6. Restore original window size
+            self.resize(target_size)
+            
+            # 7. Auto position correct: calculate restored margins offset and move window to prevent graphic displacement
+            new_label_global = self.label.mapToGlobal(QPoint(0, 0))
+            offset_x = new_label_global.x() - self.x()
+            offset_y = new_label_global.y() - self.y()
+            self.move(global_pos.x() - offset_x, global_pos.y() - offset_y)
 
     def start_selection(self):
         self.pause_listeners()
@@ -1676,42 +1692,29 @@ class MagnifierWindow(QMainWindow):
             cap_w = int(view_w / self.zoom_factor)
             cap_h = int(view_h / self.zoom_factor)
             
-            # --- Border Clipping and Padding logic to prevent stride tilting / stretching ---
+            # --- Border Clipping Logic: Prevents box from going outside monitor boundaries ---
             x1 = x - cap_w // 2
             y1 = y - cap_h // 2
-            x2 = x1 + cap_w
-            y2 = y1 + cap_h
             
-            # Clip target region dynamically to stay strictly inside the monitor boundaries
-            dx1 = max(self.desktop_rect.left(), x1)
-            dy1 = max(self.desktop_rect.top(), y1)
-            dx2 = min(self.desktop_rect.right(), x2)
-            dy2 = min(self.desktop_rect.bottom(), y2)
+            # Clamp the top-left coordinate of the capture frame inside the desktop screen resolution bounds
+            min_left = self.desktop_rect.left()
+            min_top = self.desktop_rect.top()
+            max_left = self.desktop_rect.right() - cap_w
+            max_top = self.desktop_rect.bottom() - cap_h
             
-            dw = max(1, dx2 - dx1)
-            dh = max(1, dy2 - dy1)
+            cx1 = max(min_left, min(max_left, x1))
+            cy1 = max(min_top, min(max_top, y1))
             
             monitor = {
-                'top': dy1, 
-                'left': dx1, 
-                'width': dw, 
-                'height': dh
+                'top': cy1, 
+                'left': cx1, 
+                'width': cap_w, 
+                'height': cap_h
             }
             
-            # Safe screen grab of inside-monitor boundaries
+            # Safe screen grab of strictly inner monitor coordinates
             sct_img = self.sct.grab(monitor)
-            captured_img = Image.frombytes('RGB', sct_img.size, sct_img.bgra, 'raw', 'BGRX')
-            
-            # Padding: if original target area is partially outside, pad the rest with solid black
-            if dw < cap_w or dh < cap_h:
-                final_img = Image.new('RGB', (cap_w, cap_h), (0, 0, 0))
-                paste_x = dx1 - x1
-                paste_y = dy1 - y1
-                final_img.paste(captured_img, (paste_x, paste_y))
-                img = final_img
-            else:
-                img = captured_img
-            # ---------------------------------------------------------------------------------
+            img = Image.frombytes('RGB', sct_img.size, sct_img.bgra, 'raw', 'BGRX')
             
             img = img.resize((view_w, view_h), Image.Resampling.NEAREST)
             img = img.convert('RGBA')
@@ -1720,13 +1723,22 @@ class MagnifierWindow(QMainWindow):
             qimg = QImage(data, view_w, view_h, QImage.Format.Format_RGBA8888)
             pixmap = QPixmap.fromImage(qimg)
             
+            # Draw targeting crosshair
             if self.follow_mouse:
+                # Offset crosshair position based on clamped box shift so it stays visually synced
+                box_center_x = cx1 + cap_w / 2.0
+                box_center_y = cy1 + cap_h / 2.0
+                
+                diff_x = x - box_center_x
+                diff_y = y - box_center_y
+                
+                render_x = int(view_w / 2.0 + diff_x * self.zoom_factor)
+                render_y = int(view_h / 2.0 + diff_y * self.zoom_factor)
+                
                 painter = QPainter(pixmap)
                 painter.setPen(QPen(QColor(255, 69, 58, 200), 1))
-                cx = view_w // 2
-                cy = view_h // 2
-                painter.drawLine(cx - 15, cy, cx + 15, cy)
-                painter.drawLine(cx, cy - 15, cx, cy + 15)
+                painter.drawLine(render_x - 15, render_y, render_x + 15, render_y)
+                painter.drawLine(render_x, render_y - 15, render_x, render_y + 15)
                 painter.end()
                 
             self.label.setPixmap(pixmap)
