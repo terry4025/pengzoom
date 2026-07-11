@@ -3,44 +3,66 @@ import threading
 import time
 import urllib.request
 import urllib.error
-from uvicorn import Config, Server
-from fastapi import FastAPI, Request
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from PyQt6.QtCore import QObject, pyqtSignal
-
-# Core FastAPI app definition
-app = FastAPI()
 
 # Global in-memory state store for party member cooldowns
 # Format: { "player_name": { "skill_name": { "is_ready": bool, "timestamp": float } } }
 PARTY_STATES = {}
 
-@app.post("/update")
-async def update_status(request: Request):
-    try:
-        data = await request.json()
-        player = data.get("player")
-        skill = data.get("skill")
-        is_ready = data.get("is_ready")
+class PartyStatusHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Mute console logging to keep execution clean
+        pass
         
-        if player and skill is not None:
-            if player not in PARTY_STATES:
-                PARTY_STATES[player] = {}
-            PARTY_STATES[player][skill] = {
-                "is_ready": is_ready,
-                "timestamp": time.time()
-            }
-        return {"status": "success"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    def do_POST(self):
+        try:
+            if self.path == "/update":
+                content_length = int(self.headers.get('Content-Length', 0))
+                post_data = self.rfile.read(content_length)
+                data = json.loads(post_data.decode("utf-8"))
+                
+                player = data.get("player")
+                skill = data.get("skill")
+                is_ready = data.get("is_ready")
+                
+                if player and skill is not None:
+                    if player not in PARTY_STATES:
+                        PARTY_STATES[player] = {}
+                    PARTY_STATES[player][skill] = {
+                        "is_ready": is_ready,
+                        "timestamp": time.time()
+                    }
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"status":"success"}')
+            elif self.path == "/clear":
+                PARTY_STATES.clear()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"status":"cleared"}')
+            else:
+                self.send_response(404)
+                self.end_headers()
+        except Exception as e:
+            try:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode('utf-8'))
+            except Exception:
+                pass
 
-@app.get("/status")
-async def get_status():
-    return PARTY_STATES
-
-@app.post("/clear")
-async def clear_status():
-    PARTY_STATES.clear()
-    return {"status": "cleared"}
+    def do_GET(self):
+        if self.path == "/status":
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(PARTY_STATES).encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
 
 
 class CooldownServer(QObject):
@@ -52,23 +74,26 @@ class CooldownServer(QObject):
         self.host = host
         self.port = port
         self.server_thread = None
-        self.server = None
+        self.httpd = None
         
     def start(self):
         if self.server_thread and self.server_thread.is_alive():
             return
             
-        config = Config(app=app, host=self.host, port=self.port, log_config=None)
-        self.server = Server(config=config)
-        
-        # Override default uvicorn server run to handle graceful shutdown safely
+        try:
+            # Use multi-threaded HTTP server if possible
+            from http.server import ThreadingHTTPServer
+            self.httpd = ThreadingHTTPServer((self.host, self.port), PartyStatusHandler)
+        except ImportError:
+            self.httpd = HTTPServer((self.host, self.port), PartyStatusHandler)
+            
         self.server_thread = threading.Thread(target=self._run_server, daemon=True)
         self.server_thread.start()
         self.started.emit()
         
     def _run_server(self):
         try:
-            self.server.run()
+            self.httpd.serve_forever()
         except Exception as e:
             import traceback
             try:
@@ -78,8 +103,12 @@ class CooldownServer(QObject):
                 pass
             
     def stop(self):
-        if self.server:
-            self.server.should_exit = True
+        if self.httpd:
+            try:
+                self.httpd.shutdown()
+                self.httpd.server_close()
+            except Exception:
+                pass
         self.stopped.emit()
 
 
