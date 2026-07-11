@@ -5,6 +5,7 @@ import mss
 import numpy as np
 import winsound  # Win32 system sound for cooldown alerts
 import threading  # Asynchronous threading to prevent mouse lagging
+import traceback  # Traceback debugging helper to capture exact popup crashes
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, 
                              QHBoxLayout, QWidget, QFrame, QPushButton, QSlider, 
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
@@ -549,7 +550,7 @@ class SettingsModal(QDialog):
         # 1. Follow Hotkey
         lbl_follow = QLabel("마우스 따라오기:")
         lbl_follow.setStyleSheet("font-size: 13px; color: #cccccc;")
-        self.btn_follow = QPushButton(self.parent_window.get_display_text(self.temp_follow, "Ctrl+MiddleClick"))
+        self.btn_follow = QPushButton(self.get_display_text(self.temp_follow, "Ctrl+MiddleClick"))
         self.btn_follow.clicked.connect(lambda: self.start_setting("follow", self.btn_follow))
         grid.addWidget(lbl_follow, 0, 0)
         grid.addWidget(self.btn_follow, 0, 1)
@@ -557,7 +558,7 @@ class SettingsModal(QDialog):
         # 2. Transparent (Click-through) Hotkey
         lbl_trans = QLabel("마우스 투과 토글:")
         lbl_trans.setStyleSheet("font-size: 13px; color: #cccccc;")
-        self.btn_transparent = QPushButton(self.parent_window.get_display_text(self.temp_transparent, "Ctrl+Alt+T"))
+        self.btn_transparent = QPushButton(self.get_display_text(self.temp_transparent, "Ctrl+Alt+T"))
         self.btn_transparent.clicked.connect(lambda: self.start_setting("transparent", self.btn_transparent))
         grid.addWidget(lbl_trans, 1, 0)
         grid.addWidget(self.btn_transparent, 1, 1)
@@ -565,7 +566,7 @@ class SettingsModal(QDialog):
         # 3. Minimize Window Hotkey
         lbl_hide = QLabel("최소화(가리기) 토글:")
         lbl_hide.setStyleSheet("font-size: 13px; color: #cccccc;")
-        self.btn_hide = QPushButton(self.parent_window.get_display_text(self.temp_hide, "Ctrl+Alt+H"))
+        self.btn_hide = QPushButton(self.get_display_text(self.temp_hide, "Ctrl+Alt+H"))
         self.btn_hide.clicked.connect(lambda: self.start_setting("hide", self.btn_hide))
         grid.addWidget(lbl_hide, 2, 0)
         grid.addWidget(self.btn_hide, 2, 1)
@@ -1595,16 +1596,26 @@ class MagnifierWindow(QMainWindow):
         self.opacity_val_label.setText(f'{value}%')
 
     def show_settings(self):
-        self.pause_listeners()
-        dialog = SettingsModal(self)
-        dialog.exec()
-        self.resume_listeners()
+        try:
+            self.pause_listeners()
+            dialog = SettingsModal(self)
+            dialog.exec()
+            self.resume_listeners()
+        except Exception as e:
+            err_msg = f"설정 창 실행 중 예외가 발생했습니다:\n{str(e)}\n\n{traceback.format_exc()}"
+            QMessageBox.critical(self, "설정 오류", err_msg)
+            self.resume_listeners()
 
     def show_help(self):
-        self.pause_listeners()
-        dialog = HelpModal(self)
-        dialog.exec()
-        self.resume_listeners()
+        try:
+            self.pause_listeners()
+            dialog = HelpModal(self)
+            dialog.exec()
+            self.resume_listeners()
+        except Exception as e:
+            err_msg = f"도움말 창 실행 중 예외가 발생했습니다:\n{str(e)}\n\n{traceback.format_exc()}"
+            QMessageBox.critical(self, "도움말 오류", err_msg)
+            self.resume_listeners()
 
     def update_magnifier(self):
         try:
@@ -1651,6 +1662,9 @@ class MagnifierWindow(QMainWindow):
             self.label.setPixmap(pixmap)
         except Exception:
             pass
+
+    def get_display_text(self, val, fallback):
+        return val if val else fallback
 
     def check_hotkey_match(self, parsed_parts, current_key_name, is_t_key, is_h_key):
         target_key = parsed_parts[-1].lower()
