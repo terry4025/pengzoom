@@ -1,18 +1,29 @@
 import sys
+import os
+import json
 import mss
 import numpy as np
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, 
                              QHBoxLayout, QWidget, QFrame, QPushButton, QSlider, 
                              QDialog, QSizeGrip, QSizePolicy)
 from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject
-from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor
+from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon
 from PIL import Image
 from pynput import mouse, keyboard
+
+# Set explicit AppUserModelID on Windows to fix Taskbar Icon grouping and display issues
+import ctypes
+try:
+    myappid = 'terry4025.pengzoom.magnifier.2.0'
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+except Exception:
+    pass
 
 class InputBridge(QObject):
     zoom_changed = pyqtSignal(int)
     toggle_follow = pyqtSignal()
     toggle_click_through = pyqtSignal()
+    toggle_hide = pyqtSignal()
     hotkey_set = pyqtSignal(str)
 
 class HelpModal(QDialog):
@@ -58,20 +69,21 @@ class HelpModal(QDialog):
         container_layout.setContentsMargins(24, 24, 24, 24)
         container_layout.setSpacing(16)
         
-        title_label = QLabel("🐧 펭구 줌인 Pro 사용 가이드")
+        title_label = QLabel("🐧 펭구쫭을 위한 사용 가이드")
         title_label.setStyleSheet("font-size: 18px; font-weight: 600; color: #ffffff;")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         container_layout.addWidget(title_label)
         
         content_label = QLabel(
-            "🍎 <b>주요 단축키 및 조작법</b><br><br>"
+            "<b>주요 단축키 및 조작법</b><br><br>"
             "1. <b>확대/축소</b>: <span style='color: #0088ff;'>Ctrl + 마우스 휠</span><br>"
             "2. <b>따라오기 토글</b>: <span style='color: #0088ff;'>Ctrl + 휠 클릭</span> (또는 지정된 키)<br>"
             "3. <b>영역 지정</b>: [영역 지정] 클릭 후 화면 드래그<br>"
             "4. <b>투명도 설정</b>: 하단 투명도 슬라이더 사용 (15% ~ 100%)<br>"
             "5. <b>마우스 투과 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + T</span><br>"
             "   <i>※ 투과 모드가 켜지면 마우스 클릭이 창을 통과해 뒤쪽 게임을 조작할 수 있습니다. 다시 일반 모드로 돌아오려면 단축키를 누르세요.</i><br>"
-            "6. <b>프로그램 종료</b>: ✕ 버튼 또는 ESC 키"
+            "6. <b>프로그램 숨기기/보이기</b>: <span style='color: #0088ff;'>Ctrl + Alt + H</span> 또는 [가리기] 버튼<br>"
+            "7. <b>프로그램 종료</b>: ✕ 버튼 또는 ESC 키"
         )
         content_label.setStyleSheet("font-size: 13px; line-height: 1.5; color: #cccccc;")
         content_label.setWordWrap(True)
@@ -187,17 +199,22 @@ class MagnifierWindow(QMainWindow):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        self.zoom_factor = 2.0
+        # Load window icon
+        self.load_icon()
+        
+        # Load previous settings or default
+        self.load_settings()
+        
         self.follow_mouse = True
         self.click_through = False
         self.last_capture_pos = QPoint(0, 0)
-        self.custom_hotkey = None
         self.is_setting_hotkey = False
         
         self.bridge = InputBridge()
         self.bridge.zoom_changed.connect(self.handle_global_zoom)
         self.bridge.toggle_follow.connect(self.toggle_follow)
         self.bridge.toggle_click_through.connect(self.toggle_click_through)
+        self.bridge.toggle_hide.connect(self.toggle_hide_mode)
         self.bridge.hotkey_set.connect(self.on_hotkey_set)
         
         self.ctrl_pressed = False
@@ -217,12 +234,61 @@ class MagnifierWindow(QMainWindow):
         
         self.resize(420, 540)
         self.old_pos = None
+        
+        # Apply loaded settings to widgets
+        self.zoom_slider.setValue(int(self.zoom_factor * 10))
+        self.opacity_slider.setValue(self.opacity_value)
+        self.setWindowOpacity(self.opacity_value / 100.0)
+        if self.custom_hotkey:
+            self.hotkey_btn.setText(f'단축키: {self.custom_hotkey}')
+
+    def load_icon(self):
+        icon_path = "icon2.ico"
+        if hasattr(sys, '_MEIPASS'):
+            icon_path = os.path.join(sys._MEIPASS, "icon2.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+
+    def get_config_path(self):
+        appdata = os.environ.get('APPDATA', os.path.expanduser('~'))
+        config_dir = os.path.join(appdata, 'PengZoom')
+        os.makedirs(config_dir, exist_ok=True)
+        return os.path.join(config_dir, 'config.json')
+
+    def load_settings(self):
+        config_path = self.get_config_path()
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.zoom_factor = data.get('zoom_factor', 2.0)
+                    self.opacity_value = data.get('opacity', 100)
+                    self.custom_hotkey = data.get('custom_hotkey', None)
+                    return
+            except Exception:
+                pass
+        # Default fallback settings
+        self.zoom_factor = 2.0
+        self.opacity_value = 100
+        self.custom_hotkey = None
+
+    def save_settings(self):
+        config_path = self.get_config_path()
+        try:
+            data = {
+                'zoom_factor': self.zoom_factor,
+                'opacity': self.opacity_slider.value(),
+                'custom_hotkey': self.custom_hotkey
+            }
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except Exception:
+            pass
 
     def setup_ui(self):
         self.container = ResizableContainer()
         self.setCentralWidget(self.container)
         
-        # Stylize UI components using Apple design tokens
         self.setStyleSheet("""
             QWidget {
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -269,6 +335,16 @@ class MagnifierWindow(QMainWindow):
             QPushButton#HelpBtn:hover {
                 background-color: rgba(255, 255, 255, 0.16);
             }
+            QPushButton#HideBtn {
+                background-color: rgba(255, 255, 255, 0.08);
+                color: #e0e0e0;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 14px;
+                font-size: 12px;
+            }
+            QPushButton#HideBtn:hover {
+                background-color: rgba(255, 255, 255, 0.18);
+            }
             QSlider::groove:horizontal {
                 height: 6px;
                 background: rgba(255, 255, 255, 0.12);
@@ -299,6 +375,12 @@ class MagnifierWindow(QMainWindow):
         # Title/Controls Bar
         self.title_layout = QHBoxLayout()
         self.title_layout.setSpacing(8)
+        
+        # Add a Hide Button to the very left
+        self.hide_window_btn = QPushButton('가리기')
+        self.hide_window_btn.setObjectName('HideBtn')
+        self.hide_window_btn.clicked.connect(self.hide)
+        self.title_layout.addWidget(self.hide_window_btn)
         
         self.select_btn = QPushButton('영역 지정')
         self.select_btn.clicked.connect(self.start_selection)
@@ -358,7 +440,7 @@ class MagnifierWindow(QMainWindow):
         self.zoom_layout.addWidget(zoom_title)
         
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(10, 200)  # Support 1.0x to 20.0x
+        self.zoom_slider.setRange(10, 200)
         self.zoom_slider.setValue(20)
         self.zoom_slider.valueChanged.connect(self.on_zoom_slider_changed)
         self.zoom_layout.addWidget(self.zoom_slider)
@@ -414,9 +496,29 @@ class MagnifierWindow(QMainWindow):
         except Exception:
             current_key_name = str(key)
             
-        # Toggle click through globally on Ctrl+Alt+T
-        if current_key_name == 't' and self.ctrl_pressed and self.alt_pressed:
+        # Detect physical key index for 'T' (vkcode: 84) and 'H' (vkcode: 72)
+        # to ensure robust global shortcuts regardless of IME/ 한영 keyboard status.
+        is_t_key = False
+        is_h_key = False
+        
+        if hasattr(key, 'vk'):
+            if key.vk == 84:
+                is_t_key = True
+            elif key.vk == 72:
+                is_h_key = True
+        
+        # Fallback to string representations
+        if not is_t_key and current_key_name in ['t', 'ㅅ']:
+            is_t_key = True
+        if not is_h_key and current_key_name in ['h', 'ㅗ']:
+            is_h_key = True
+
+        if is_t_key and self.ctrl_pressed and self.alt_pressed:
             self.bridge.toggle_click_through.emit()
+            return
+            
+        if is_h_key and self.ctrl_pressed and self.alt_pressed:
+            self.bridge.toggle_hide.emit()
             return
 
         if self.is_setting_hotkey:
@@ -516,6 +618,13 @@ class MagnifierWindow(QMainWindow):
         self.click_through_btn.style().polish(self.click_through_btn)
         self.show()
 
+    def toggle_hide_mode(self):
+        if self.isHidden():
+            self.show()
+            self.activateWindow()
+        else:
+            self.hide()
+
     def on_zoom_slider_changed(self, value):
         self.zoom_factor = value / 10.0
         self.zoom_val_label.setText(f'{self.zoom_factor:.1f}x')
@@ -560,7 +669,7 @@ class MagnifierWindow(QMainWindow):
             
             if self.follow_mouse:
                 painter = QPainter(pixmap)
-                painter.setPen(QPen(QColor(255, 69, 58, 200), 1))  # SF Red color crosshair
+                painter.setPen(QPen(QColor(255, 69, 58, 200), 1))
                 cx = view_w // 2
                 cy = view_h // 2
                 painter.drawLine(cx - 15, cy, cx + 15, cy)
@@ -573,7 +682,6 @@ class MagnifierWindow(QMainWindow):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            # Prevent dragging if input transparent is on or if clicking size grip
             if self.click_through:
                 return
             if self.container.grip.geometry().contains(event.pos()):
@@ -594,6 +702,9 @@ class MagnifierWindow(QMainWindow):
             self.close()
 
     def closeEvent(self, event):
+        # Auto-save settings on close
+        self.save_settings()
+        
         self.mouse_listener.stop()
         self.key_listener.stop()
         super().closeEvent(event)
