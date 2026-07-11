@@ -6,6 +6,8 @@ import numpy as np
 import winsound  # Win32 system sound for cooldown alerts
 import threading  # Asynchronous threading to prevent mouse lagging
 import traceback  # Traceback debugging helper to capture exact popup crashes
+import base64
+import atexit
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, 
                              QHBoxLayout, QWidget, QFrame, QPushButton, QSlider, 
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
@@ -17,6 +19,7 @@ from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
 from PIL import Image
 from pynput import keyboard
+import cv2
 
 # Import our custom modules
 import cooldown_detector
@@ -145,6 +148,20 @@ LUCIDE_PENGUIN_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150
   </linearGradient>
   <path d="m47.4 118c0.5 4.4 2 7.4 4.2 10 2.5 1 9.4 3.9 23.1 4.1 10.3 0 19.4-1.5 23.7-3.6 2-2.5 3.6-5.5 4-10.3-4.4 2.9-12.9 7.4-27.2 7.5-11.8 0-21.2-3.1-27.8-7.7z" fill="url(#SVGID_10_)"/>
 </svg>"""
+
+# Server Hosting (Host) & Client Link (Join) SVG Icons
+LUCIDE_HOST_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0a84ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-radio">
+  <circle cx="12" cy="12" r="2"/>
+  <path d="M16.2 7.8a6 6 0 0 1 0 8.4m3.6-12a11 11 0 0 1 0 15.6M7.8 16.2a6 6 0 0 1 0-8.4M4.2 19.8a11 11 0 0 1 0-15.6"/>
+</svg>
+"""
+
+LUCIDE_JOIN_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#30d158" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-link-2">
+  <path d="M9 17H7A5 5 0 0 1 7 7h2m6 10h2a5 5 0 0 0 0-10h-2m-7 5h8"/>
+</svg>
+"""
 
 def get_svg_icon(svg_str):
     try:
@@ -532,7 +549,7 @@ class SettingsModal(QDialog):
         container_layout.addLayout(btn_layout)
         layout.addWidget(container)
         
-        self.resize(460, 460)
+        self.resize(460, 480)
         self.old_pos = None
 
     def setup_hotkeys_tab(self, tab):
@@ -634,31 +651,72 @@ class SettingsModal(QDialog):
     def setup_network_tab(self, tab):
         lay = QVBoxLayout(tab)
         lay.setContentsMargins(12, 12, 12, 12)
-        lay.setSpacing(10)
+        lay.setSpacing(12)
         
-        # Character Name
+        # Character Name Row
         char_row = QHBoxLayout()
-        char_row.addWidget(QLabel("캐릭터명:"))
+        char_lbl = QLabel("👤 캐릭터명:")
+        char_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
+        char_row.addWidget(char_lbl)
         self.txt_char_name = QLineEdit(self.parent_window.player_name)
+        self.txt_char_name.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+                color: #ffffff;
+                padding: 6px 10px;
+                font-size: 13px;
+            }
+        """)
         char_row.addWidget(self.txt_char_name)
         lay.addLayout(char_row)
         
         # Host Server Group
         host_box = QFrame()
-        host_box.setStyleSheet("background-color: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 10px;")
+        host_box.setStyleSheet("""
+            QFrame {
+                background-color: rgba(10, 132, 255, 0.04); 
+                border: 1px solid rgba(10, 132, 255, 0.18); 
+                border-radius: 12px; 
+                padding: 12px;
+            }
+        """)
         host_lay = QVBoxLayout(host_box)
-        host_lay.setContentsMargins(8, 8, 8, 8)
+        host_lay.setContentsMargins(12, 12, 12, 12)
+        host_lay.setSpacing(10)
         
+        host_title_lay = QHBoxLayout()
+        host_title_lay.setSpacing(6)
+        host_icon = QLabel()
+        host_icon.setFixedSize(18, 18)
+        host_icon.setPixmap(get_svg_icon(LUCIDE_HOST_SVG).pixmap(18, 18))
         host_lbl = QLabel("<b>중계 방 만들기 (Host)</b>")
-        host_lbl.setStyleSheet("color: #0a84ff; font-size: 13px;")
-        host_lay.addWidget(host_lbl)
+        host_lbl.setStyleSheet("color: #0a84ff; font-size: 14px; font-weight: 600; border: none; background: transparent;")
+        host_title_lay.addWidget(host_icon)
+        host_title_lay.addWidget(host_lbl)
+        host_title_lay.addStretch()
+        host_lay.addLayout(host_title_lay)
         
         srv_ctrl_row = QHBoxLayout()
+        srv_ctrl_row.setSpacing(10)
         self.btn_toggle_server = QPushButton("대기실 서버 가동")
+        self.btn_toggle_server.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(10, 132, 255, 0.15);
+                border: 1px solid rgba(10, 132, 255, 0.3);
+                border-radius: 8px;
+                padding: 6px 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(10, 132, 255, 0.25);
+            }
+        """)
         self.btn_toggle_server.clicked.connect(self.toggle_local_server)
         srv_ctrl_row.addWidget(self.btn_toggle_server)
+        
         self.lbl_server_status = QLabel("서버 상태: 꺼짐")
-        self.lbl_server_status.setStyleSheet("color: #aaaaaa;")
+        self.lbl_server_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent;")
         srv_ctrl_row.addWidget(self.lbl_server_status)
         host_lay.addLayout(srv_ctrl_row)
         
@@ -666,26 +724,66 @@ class SettingsModal(QDialog):
         
         # Guest Connection Group
         guest_box = QFrame()
-        guest_box.setStyleSheet("background-color: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 10px;")
+        guest_box.setStyleSheet("""
+            QFrame {
+                background-color: rgba(48, 209, 88, 0.04); 
+                border: 1px solid rgba(48, 209, 88, 0.18); 
+                border-radius: 12px; 
+                padding: 12px;
+            }
+        """)
         guest_lay = QVBoxLayout(guest_box)
-        guest_lay.setContentsMargins(8, 8, 8, 8)
+        guest_lay.setContentsMargins(12, 12, 12, 12)
+        guest_lay.setSpacing(10)
         
+        guest_title_lay = QHBoxLayout()
+        guest_title_lay.setSpacing(6)
+        guest_icon = QLabel()
+        guest_icon.setFixedSize(18, 18)
+        guest_icon.setPixmap(get_svg_icon(LUCIDE_JOIN_SVG).pixmap(18, 18))
         guest_lbl = QLabel("<b>대기실 접속하기 (Join)</b>")
-        guest_lbl.setStyleSheet("color: #30d158; font-size: 13px;")
-        guest_lay.addWidget(guest_lbl)
+        guest_lbl.setStyleSheet("color: #30d158; font-size: 14px; font-weight: 600; border: none; background: transparent;")
+        guest_title_lay.addWidget(guest_icon)
+        guest_title_lay.addWidget(guest_lbl)
+        guest_title_lay.addStretch()
+        guest_lay.addLayout(guest_title_lay)
         
         ip_row = QHBoxLayout()
-        ip_row.addWidget(QLabel("방장 IP주소:"))
+        ip_lbl = QLabel("방장 IP주소:")
+        ip_lbl.setStyleSheet("border: none; background: transparent; font-size: 12px; color: #cccccc;")
+        ip_row.addWidget(ip_lbl)
         self.txt_host_url = QLineEdit(self.parent_window.server_url)
+        self.txt_host_url.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+                color: #ffffff;
+                padding: 4px 8px;
+            }
+        """)
         ip_row.addWidget(self.txt_host_url)
         guest_lay.addLayout(ip_row)
         
         conn_row = QHBoxLayout()
+        conn_row.setSpacing(10)
         self.btn_toggle_client = QPushButton("방 접속하기")
+        self.btn_toggle_client.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(48, 209, 88, 0.15);
+                border: 1px solid rgba(48, 209, 88, 0.3);
+                border-radius: 8px;
+                padding: 6px 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(48, 209, 88, 0.25);
+            }
+        """)
         self.btn_toggle_client.clicked.connect(self.toggle_client_connection)
         conn_row.addWidget(self.btn_toggle_client)
+        
         self.lbl_client_status = QLabel("접속 상태: 대기")
-        self.lbl_client_status.setStyleSheet("color: #aaaaaa;")
+        self.lbl_client_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent;")
         conn_row.addWidget(self.lbl_client_status)
         guest_lay.addLayout(conn_row)
         
@@ -693,6 +791,18 @@ class SettingsModal(QDialog):
         
         # Party Panel Show Toggle
         self.btn_show_panel = QPushButton("파티 현황 모니터판 켜기")
+        self.btn_show_panel.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 10px;
+                padding: 8px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.16);
+            }
+        """)
         self.btn_show_panel.clicked.connect(self.toggle_party_panel_visible)
         lay.addWidget(self.btn_show_panel)
         
@@ -713,6 +823,7 @@ class SettingsModal(QDialog):
                 show_dark_message_box(self, "오류", "이미 존재하는 스킬명입니다.", QMessageBox.Icon.Warning)
                 return
             self.parent_window.detector.add_slot(name, None)
+            self.parent_window.save_settings()  # Auto-save config when slot added
             self.refresh_skill_list()
 
     def delete_selected_skill(self):
@@ -720,6 +831,7 @@ class SettingsModal(QDialog):
         if curr:
             name = curr.text()
             self.parent_window.detector.remove_slot(name)
+            self.parent_window.save_settings()  # Auto-save config when slot deleted
             self.refresh_skill_list()
             self.lbl_selected_status.setText("선택된 스킬 없음")
 
@@ -750,20 +862,20 @@ class SettingsModal(QDialog):
         if self.parent_window.server_running:
             self.btn_toggle_server.setText("서버 중지")
             self.lbl_server_status.setText("서버 가동 중 (포트 9090)")
-            self.lbl_server_status.setStyleSheet("color: #30d158; font-weight: 600;")
+            self.lbl_server_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent;")
         else:
             self.btn_toggle_server.setText("대기실 서버 가동")
             self.lbl_server_status.setText("서버 상태: 꺼짐")
-            self.lbl_server_status.setStyleSheet("color: #aaaaaa;")
+            self.lbl_server_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent;")
             
         if self.parent_window.client_running:
             self.btn_toggle_client.setText("접속 끊기")
             self.lbl_client_status.setText("동기화 연결 중")
-            self.lbl_client_status.setStyleSheet("color: #30d158; font-weight: 600;")
+            self.lbl_client_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent;")
         else:
             self.btn_toggle_client.setText("방 접속하기")
             self.lbl_client_status.setText("접속 상태: 대기")
-            self.lbl_client_status.setStyleSheet("color: #aaaaaa;")
+            self.lbl_client_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent;")
             
         if self.parent_window.party_panel.isVisible():
             self.btn_show_panel.setText("파티 현황 모니터판 끄기")
@@ -813,6 +925,7 @@ class SettingsModal(QDialog):
         
         # Apply updated ui hiding right away
         self.parent_window.update_ui_visibility()
+        self.parent_window.save_settings()  # Auto-save changes immediately
         self.accept()
 
     def keyPressEvent(self, event):
@@ -1108,6 +1221,9 @@ class MagnifierWindow(QMainWindow):
         self.load_settings()
         self.load_icon()
         
+        # Register atexit process termination handler for double-safe auto-saving
+        atexit.register(self.save_settings)
+        
         self.bridge = InputBridge()
         self.bridge.zoom_changed.connect(self.handle_global_zoom)
         self.bridge.toggle_follow.connect(self.toggle_follow)
@@ -1198,6 +1314,17 @@ class MagnifierWindow(QMainWindow):
 
     def load_settings(self):
         config_path = self.get_config_path()
+        
+        # Default fallbacks
+        self.zoom_factor = 2.0
+        self.opacity_value = 100
+        self.hotkey_follow = None
+        self.hotkey_transparent = "Ctrl+Alt+T"
+        self.hotkey_hide = "Ctrl+Alt+H"
+        self.player_name = "플레이어"
+        self.server_url = "http://127.0.0.1:9090"
+        self.hide_ui_on_transparent = False
+        
         if os.path.exists(config_path):
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
@@ -1211,19 +1338,64 @@ class MagnifierWindow(QMainWindow):
                     self.player_name = data.get('player_name', "플레이어")
                     self.server_url = data.get('server_url', "http://127.0.0.1:9090")
                     self.hide_ui_on_transparent = data.get('hide_ui_on_transparent', False)
+                    
+                    # Restore skill slots and templates (grayscale CV2 matrices) from config
+                    skills = data.get('skills', [])
+                    templates_dir = os.path.join(os.path.dirname(config_path), 'templates')
+                    
+                    self.detector.slots.clear()
+                    
+                    for s_info in skills:
+                        name = s_info.get("name")
+                        rect_val = s_info.get("rect")
+                        threshold = s_info.get("threshold", 0.85)
+                        
+                        rect = QRect(rect_val[0], rect_val[1], rect_val[2], rect_val[3]) if rect_val else None
+                        
+                        template_img = None
+                        try:
+                            # Use base64 encoding to map skill slot names to safe local file system path formats
+                            safe_filename = base64.urlsafe_b64encode(name.encode('utf-8')).decode('utf-8') + ".png"
+                            img_path = os.path.join(templates_dir, safe_filename)
+                            if os.path.exists(img_path):
+                                img_array = np.fromfile(img_path, dtype=np.uint8)
+                                template_img = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+                        except Exception:
+                            pass
+                            
+                        self.detector.add_slot(name, rect, threshold, template_img=template_img)
                     return
             except Exception:
                 pass
-        
-        self.zoom_factor = 2.0
-        self.opacity_value = 100
-        self.hotkey_follow = None
-        self.hotkey_transparent = "Ctrl+Alt+T"
-        self.hotkey_hide = "Ctrl+Alt+H"
 
     def save_settings(self):
         config_path = self.get_config_path()
         try:
+            # 1. Serialize and save skill slot configurations & template grayscale arrays safely
+            skills_data = []
+            templates_dir = os.path.join(os.path.dirname(config_path), 'templates')
+            os.makedirs(templates_dir, exist_ok=True)
+            
+            for name, slot in self.detector.slots.items():
+                r = slot.rect
+                rect_val = [r.x(), r.y(), r.width(), r.height()] if isinstance(r, QRect) else (list(r) if r else None)
+                skills_data.append({
+                    "name": name,
+                    "rect": rect_val,
+                    "threshold": slot.threshold
+                })
+                
+                # Write CV2 templates to file with non-ascii Windows compatibility using numpy tofile
+                if slot.template is not None:
+                    try:
+                        safe_filename = base64.urlsafe_b64encode(name.encode('utf-8')).decode('utf-8') + ".png"
+                        img_path = os.path.join(templates_dir, safe_filename)
+                        is_success, im_buf_arr = cv2.imencode(".png", slot.template)
+                        if is_success:
+                            im_buf_arr.tofile(img_path)
+                    except Exception:
+                        pass
+
             data = {
                 'zoom_factor': self.zoom_factor,
                 'opacity': self.opacity_slider.value(),
@@ -1232,7 +1404,8 @@ class MagnifierWindow(QMainWindow):
                 'hotkey_hide': self.hotkey_hide,
                 'player_name': self.player_name,
                 'server_url': self.server_url,
-                'hide_ui_on_transparent': self.hide_ui_on_transparent
+                'hide_ui_on_transparent': self.hide_ui_on_transparent,
+                'skills': skills_data
             }
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
@@ -1540,6 +1713,9 @@ class MagnifierWindow(QMainWindow):
                 
                 # Add to detector
                 self.detector.add_slot(self.cooldown_capture_name, rect, threshold=0.85, template_img=img)
+                
+                # Auto-save changes immediately to preserve skill slots template images
+                self.save_settings()
         except Exception:
             pass
             
@@ -1560,29 +1736,41 @@ class MagnifierWindow(QMainWindow):
 
     # Server hosting control
     def start_party_server(self):
-        self.server = network_manager.CooldownServer()
-        self.server.start()
-        self.server_running = True
+        try:
+            self.server = network_manager.CooldownServer()
+            self.server.start()
+            self.server_running = True
+        except Exception as e:
+            QMessageBox.critical(self, "서버 오류", f"대기실 서버 가동 중 오류가 발생했습니다:\n{str(e)}")
 
     def stop_party_server(self):
         if self.server:
-            self.server.stop()
+            try:
+                self.server.stop()
+            except Exception:
+                pass
             self.server = None
         self.server_running = False
 
     # Client networking control
     def start_party_client(self):
-        self.client = network_manager.CooldownClient(
-            server_url=self.server_url, 
-            player_name=self.player_name
-        )
-        self.client.status_updated.connect(self.party_panel.update_states)
-        self.client.start()
-        self.client_running = True
+        try:
+            self.client = network_manager.CooldownClient(
+                server_url=self.server_url, 
+                player_name=self.player_name
+            )
+            self.client.status_updated.connect(self.party_panel.update_states)
+            self.client.start()
+            self.client_running = True
+        except Exception as e:
+            QMessageBox.critical(self, "접속 오류", f"대기실 접속 시도 중 오류가 발생했습니다:\n{str(e)}")
 
     def stop_party_client(self):
         if self.client:
-            self.client.stop()
+            try:
+                self.client.stop()
+            except Exception:
+                pass
             self.client = None
         self.client_running = False
 
@@ -1600,6 +1788,7 @@ class MagnifierWindow(QMainWindow):
         
         self.zoom_factor = max(1.0, min(20.0, new_zoom))
         self.zoom_slider.setValue(int(self.zoom_factor * 10))
+        self.save_settings()  # Auto-save layout zoom factor
 
     def toggle_follow(self):
         self.follow_mouse = not self.follow_mouse
@@ -1613,6 +1802,7 @@ class MagnifierWindow(QMainWindow):
             
         self.follow_btn.style().unpolish(self.follow_btn)
         self.follow_btn.style().polish(self.follow_btn)
+        self.save_settings()  # Auto-save follow setting
 
     def toggle_click_through(self):
         self.click_through = not self.click_through
@@ -1636,6 +1826,7 @@ class MagnifierWindow(QMainWindow):
         
         # Refresh UI visible state based on click-through and toggle options
         self.update_ui_visibility()
+        self.save_settings()  # Auto-save click-through setting
 
     def toggle_hide_mode(self):
         if self.isMinimized():
@@ -1647,11 +1838,13 @@ class MagnifierWindow(QMainWindow):
     def on_zoom_slider_changed(self, value):
         self.zoom_factor = value / 10.0
         self.zoom_val_label.setText(f'{self.zoom_factor:.1f}x')
+        self.save_settings()  # Auto-save zoom slider changes
 
     def on_opacity_slider_changed(self, value):
         opacity = value / 100.0
         self.setWindowOpacity(opacity)
         self.opacity_val_label.setText(f'{value}%')
+        self.save_settings()  # Auto-save opacity slider changes
 
     def show_settings(self):
         try:
