@@ -137,17 +137,6 @@ LUCIDE_PENGUIN_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150
   <path d="m47.4 118c0.5 4.4 2 7.4 4.2 10 2.5 1 9.4 3.9 23.1 4.1 10.3 0 19.4-1.5 23.7-3.6 2-2.5 3.6-5.5 4-10.3-4.4 2.9-12.9 7.4-27.2 7.5-11.8 0-21.2-3.1-27.8-7.7z" fill="url(#SVGID_10_)"/>
 </svg>"""
 
-def get_icon_path():
-    if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, "icon2.ico")
-    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-    local_path = os.path.join(exe_dir, "icon2.ico")
-    if os.path.exists(local_path):
-        return local_path
-    if os.path.exists("icon2.ico"):
-        return "icon2.ico"
-    return ""
-
 def get_svg_icon(svg_str):
     try:
         renderer = QSvgRenderer(QByteArray(svg_str.encode('utf-8')))
@@ -160,13 +149,19 @@ def get_svg_icon(svg_str):
     except Exception:
         return QIcon()
 
-# Win32 helper to force system taskbar icon updates via SendMessageW using toWinHICON
-def force_set_window_icon(hwnd, icon_path):
-    if not os.path.exists(icon_path):
-        return
+# Win32 helper to force system taskbar icon updates via SendMessageW using in-memory SVG to HICON (Guarantees 100% display without file resolution dependencies)
+def force_set_window_icon(hwnd):
     try:
-        pixmap = QPixmap(icon_path)
-        if not pixmap.isNull():
+        # Render the custom penguin SVG directly to a 256x256 pixmap in memory
+        renderer = QSvgRenderer(QByteArray(LUCIDE_PENGUIN_SVG.encode('utf-8')))
+        if renderer.isValid():
+            pixmap = QPixmap(256, 256)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+            
+            # Extract win32 HICON handle directly from memory pixmap
             hicon = pixmap.toWinHICON()
             if hicon:
                 WM_SETICON = 0x0080
@@ -630,8 +625,8 @@ class MagnifierWindow(QMainWindow):
         
         self.setup_ui()
         
-        # Apply native win32 SendMessageW to guarantee the taskbar icon displays 100% correctly
-        force_set_window_icon(int(self.winId()), get_icon_path())
+        # Apply native win32 SendMessageW to guarantee the taskbar icon displays 100% correctly from built-in SVG
+        force_set_window_icon(int(self.winId()))
         
         self.sct = mss.mss()
         self.timer = QTimer()
@@ -646,13 +641,21 @@ class MagnifierWindow(QMainWindow):
         self.setWindowOpacity(self.opacity_value / 100.0)
 
     def showEvent(self, event):
-        force_set_window_icon(int(self.winId()), get_icon_path())
+        force_set_window_icon(int(self.winId()))
         super().showEvent(event)
 
     def load_icon(self):
-        icon_path = get_icon_path()
-        if icon_path:
-            self.setWindowIcon(QIcon(icon_path))
+        try:
+            renderer = QSvgRenderer(QByteArray(LUCIDE_PENGUIN_SVG.encode('utf-8')))
+            if renderer.isValid():
+                pixmap = QPixmap(256, 256)
+                pixmap.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(pixmap)
+                renderer.render(painter)
+                painter.end()
+                self.setWindowIcon(QIcon(pixmap))
+        except Exception:
+            pass
 
     def get_config_path(self):
         appdata = os.environ.get('APPDATA', os.path.expanduser('~'))
@@ -1158,9 +1161,20 @@ class MagnifierWindow(QMainWindow):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    icon_path = get_icon_path()
-    if icon_path:
-        app.setWindowIcon(QIcon(icon_path))
+    
+    # Set global app icon directly from built-in high quality original penguin SVG (Bypasses all local file resolution bugs!)
+    try:
+        renderer = QSvgRenderer(QByteArray(LUCIDE_PENGUIN_SVG.encode('utf-8')))
+        if renderer.isValid():
+            pixmap = QPixmap(256, 256)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+            app.setWindowIcon(QIcon(pixmap))
+    except Exception:
+        pass
+        
     window = MagnifierWindow()
     window.show()
     sys.exit(app.exec())
