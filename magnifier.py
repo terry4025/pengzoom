@@ -19,6 +19,11 @@ try:
 except Exception:
     pass
 
+# Windows API constants for win32 window modification
+GWL_EXSTYLE = -20
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_LAYERED = 0x00080000
+
 class InputBridge(QObject):
     zoom_changed = pyqtSignal(int)
     toggle_follow = pyqtSignal()
@@ -82,7 +87,7 @@ class HelpModal(QDialog):
             "4. <b>투명도 설정</b>: 하단 투명도 슬라이더 사용 (15% ~ 100%)<br>"
             "5. <b>마우스 투과 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + T</span><br>"
             "   <i>※ 투과 모드가 켜지면 마우스 클릭이 창을 통과해 뒤쪽 게임을 조작할 수 있습니다. 다시 일반 모드로 돌아오려면 단축키를 누르세요.</i><br>"
-            "6. <b>프로그램 숨기기/보이기</b>: <span style='color: #0088ff;'>Ctrl + Alt + H</span> 또는 [가리기] 버튼<br>"
+            "6. <b>프로그램 최소화 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + H</span> 또는 상단 최소화 [─] 버튼<br>"
             "7. <b>프로그램 종료</b>: ✕ 버튼 또는 ESC 키"
         )
         content_label.setStyleSheet("font-size: 13px; line-height: 1.5; color: #cccccc;")
@@ -335,15 +340,16 @@ class MagnifierWindow(QMainWindow):
             QPushButton#HelpBtn:hover {
                 background-color: rgba(255, 255, 255, 0.16);
             }
-            QPushButton#HideBtn {
+            QPushButton#MinimizeBtn {
                 background-color: rgba(255, 255, 255, 0.08);
                 color: #e0e0e0;
                 border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 14px;
-                font-size: 12px;
+                border-radius: 12px;
+                font-size: 10px;
+                font-weight: bold;
             }
-            QPushButton#HideBtn:hover {
-                background-color: rgba(255, 255, 255, 0.18);
+            QPushButton#MinimizeBtn:hover {
+                background-color: rgba(255, 255, 255, 0.16);
             }
             QSlider::groove:horizontal {
                 height: 6px;
@@ -376,12 +382,6 @@ class MagnifierWindow(QMainWindow):
         self.title_layout = QHBoxLayout()
         self.title_layout.setSpacing(8)
         
-        # Add a Hide Button to the very left
-        self.hide_window_btn = QPushButton('가리기')
-        self.hide_window_btn.setObjectName('HideBtn')
-        self.hide_window_btn.clicked.connect(self.hide)
-        self.title_layout.addWidget(self.hide_window_btn)
-        
         self.select_btn = QPushButton('영역 지정')
         self.select_btn.clicked.connect(self.start_selection)
         self.title_layout.addWidget(self.select_btn)
@@ -392,6 +392,13 @@ class MagnifierWindow(QMainWindow):
         self.title_layout.addWidget(self.follow_btn)
         
         self.title_layout.addStretch()
+        
+        # Top-right button cluster (Minimize, Help, Close) all as 24x24 circular buttons
+        self.minimize_btn = QPushButton('─')
+        self.minimize_btn.setObjectName('MinimizeBtn')
+        self.minimize_btn.setFixedSize(24, 24)
+        self.minimize_btn.clicked.connect(self.showMinimized)
+        self.title_layout.addWidget(self.minimize_btn)
         
         self.help_btn = QPushButton('?')
         self.help_btn.setObjectName('HelpBtn')
@@ -497,7 +504,6 @@ class MagnifierWindow(QMainWindow):
             current_key_name = str(key)
             
         # Detect physical key index for 'T' (vkcode: 84) and 'H' (vkcode: 72)
-        # to ensure robust global shortcuts regardless of IME/ 한영 keyboard status.
         is_t_key = False
         is_h_key = False
         
@@ -507,7 +513,6 @@ class MagnifierWindow(QMainWindow):
             elif key.vk == 72:
                 is_h_key = True
         
-        # Fallback to string representations
         if not is_t_key and current_key_name in ['t', 'ㅅ']:
             is_t_key = True
         if not is_h_key and current_key_name in ['h', 'ㅗ']:
@@ -605,25 +610,34 @@ class MagnifierWindow(QMainWindow):
 
     def toggle_click_through(self):
         self.click_through = not self.click_through
+        hwnd = int(self.winId())
+        
+        # Get current styles
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         if self.click_through:
-            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
+            new_style = style | WS_EX_TRANSPARENT | WS_EX_LAYERED
             self.click_through_btn.setText('마우스 투과: 켬')
             self.click_through_btn.setProperty("class", "PrimaryActive")
         else:
-            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, False)
+            new_style = style & ~WS_EX_TRANSPARENT
             self.click_through_btn.setText('마우스 투과: 끔')
             self.click_through_btn.setProperty("class", "")
             
+        # Apply style change directly to native window without re-creating window (Fixes window flickers!)
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
+        # SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE = 0x0037
+        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)
+        
         self.click_through_btn.style().unpolish(self.click_through_btn)
         self.click_through_btn.style().polish(self.click_through_btn)
-        self.show()
 
     def toggle_hide_mode(self):
-        if self.isHidden():
-            self.show()
+        # Global hotkey Ctrl+Alt+H toggles minimized state
+        if self.isMinimized():
+            self.showNormal()
             self.activateWindow()
         else:
-            self.hide()
+            self.showMinimized()
 
     def on_zoom_slider_changed(self, value):
         self.zoom_factor = value / 10.0
