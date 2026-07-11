@@ -1935,17 +1935,17 @@ class MagnifierWindow(QMainWindow):
                         if lower_hotkey == "ctrl+middleclick":
                             is_ctrl = ctypes.windll.user32.GetAsyncKeyState(0x11) < 0
                             if is_ctrl:
-                                self.bridge.toggle_follow_mouse.emit()
+                                self.bridge.toggle_follow.emit()
                         elif lower_hotkey == "shift+middleclick":
                             is_shift = ctypes.windll.user32.GetAsyncKeyState(0x10) < 0
                             if is_shift:
-                                self.bridge.toggle_follow_mouse.emit()
+                                self.bridge.toggle_follow.emit()
                         elif lower_hotkey == "alt+middleclick":
                             is_alt = ctypes.windll.user32.GetAsyncKeyState(0x12) < 0
                             if is_alt:
-                                self.bridge.toggle_follow_mouse.emit()
+                                self.bridge.toggle_follow.emit()
                         elif lower_hotkey == "middleclick":
-                            self.bridge.toggle_follow_mouse.emit()
+                            self.bridge.toggle_follow.emit()
             
             self.last_mbutton_pressed = curr_mbutton
         except Exception:
@@ -2076,13 +2076,13 @@ class MagnifierWindow(QMainWindow):
         if self.hotkey_hide:
             parts = [p.lower() for p in self.hotkey_hide.split('+')]
             if self.check_hotkey_match(parts, current_key_name):
-                self.bridge.toggle_hide_ui.emit()
+                self.bridge.toggle_hide.emit()
                 return
 
         if self.hotkey_follow:
             parts = [p.lower() for p in self.hotkey_follow.split('+')]
             if self.check_hotkey_match(parts, current_key_name):
-                self.bridge.toggle_follow_mouse.emit()
+                self.bridge.toggle_follow.emit()
                 return
 
     def on_key_release(self, key):
