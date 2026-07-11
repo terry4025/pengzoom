@@ -3,15 +3,21 @@ import os
 import json
 import mss
 import numpy as np
+import winsound  # Win32 system sound for cooldown alerts
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, 
                              QHBoxLayout, QWidget, QFrame, QPushButton, QSlider, 
-                             QDialog, QSizeGrip, QSizePolicy, QGridLayout)
+                             QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
+                             QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox)
 from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject
 from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
 from PIL import Image
 from pynput import mouse, keyboard
+
+# Import our custom modules
+import cooldown_detector
+import network_manager
 
 # Set explicit AppUserModelID on Windows to fix Taskbar Icon grouping and display issues
 import ctypes
@@ -149,10 +155,9 @@ def get_svg_icon(svg_str):
     except Exception:
         return QIcon()
 
-# Win32 helper to force system taskbar icon updates via SendMessageW using in-memory SVG to HICON (Guarantees 100% display without file resolution dependencies)
+# Win32 helper to force system taskbar icon updates via SendMessageW using in-memory SVG to HICON
 def force_set_window_icon(hwnd):
     try:
-        # Render the custom penguin SVG directly to a 256x256 pixmap in memory
         renderer = QSvgRenderer(QByteArray(LUCIDE_PENGUIN_SVG.encode('utf-8')))
         if renderer.isValid():
             pixmap = QPixmap(256, 256)
@@ -161,7 +166,6 @@ def force_set_window_icon(hwnd):
             renderer.render(painter)
             painter.end()
             
-            # Extract win32 HICON handle directly from memory pixmap
             hicon = pixmap.toWinHICON()
             if hicon:
                 WM_SETICON = 0x0080
@@ -178,6 +182,119 @@ class InputBridge(QObject):
     toggle_click_through = pyqtSignal()
     toggle_hide = pyqtSignal()
 
+# Floating transparent window displaying party skill statuses
+class PartyPanel(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("파티원 쿨타임 현황")
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
+                            Qt.WindowType.WindowStaysOnTopHint | 
+                            Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        self.setStyleSheet("""
+            #Container {
+                background-color: rgba(28, 28, 30, 0.85);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 12px;
+            }
+            QLabel {
+                color: #ffffff;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                font-size: 12px;
+            }
+            QLabel#Title {
+                font-size: 13px;
+                font-weight: 600;
+                color: #0a84ff;
+            }
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        container = QFrame()
+        container.setObjectName("Container")
+        self.container_layout = QVBoxLayout(container)
+        self.container_layout.setContentsMargins(12, 12, 12, 12)
+        self.container_layout.setSpacing(6)
+        
+        title = QLabel("파티원 스킬 현황")
+        title.setObjectName("Title")
+        self.container_layout.addWidget(title)
+        
+        self.list_layout = QVBoxLayout()
+        self.container_layout.addLayout(self.list_layout)
+        
+        layout.addWidget(container)
+        self.resize(220, 300)
+        self.old_pos = None
+        self.widgets = {}
+
+    def update_states(self, party_states):
+        # Clear removed players
+        current_players = set(party_states.keys())
+        for p in list(self.widgets.keys()):
+            if p not in current_players:
+                self.widgets[p]["widget"].deleteLater()
+                del self.widgets[p]
+                
+        # Update or add players
+        for player, skills in party_states.items():
+            if player not in self.widgets:
+                player_widget = QFrame()
+                player_widget.setStyleSheet("border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 4px;")
+                p_lay = QVBoxLayout(player_widget)
+                p_lay.setContentsMargins(0, 4, 0, 4)
+                
+                name_lbl = QLabel(f"👤 {player}")
+                name_lbl.setStyleSheet("font-weight: 600; color: #ffffff;")
+                p_lay.addWidget(name_lbl)
+                
+                skills_lay = QVBoxLayout()
+                skills_lay.setSpacing(2)
+                p_lay.addLayout(skills_lay)
+                
+                self.list_layout.addWidget(player_widget)
+                self.widgets[player] = {
+                    "widget": player_widget,
+                    "skills_layout": skills_lay,
+                    "labels": {}
+                }
+                
+            p_data = self.widgets[player]
+            
+            # Clear obsolete skill labels
+            for s in list(p_data["labels"].keys()):
+                if s not in skills:
+                    p_data["labels"][s].deleteLater()
+                    del p_data["labels"][s]
+                    
+            # Set skill labels
+            for skill, s_info in skills.items():
+                is_ready = s_info.get("is_ready", True)
+                if skill not in p_data["labels"]:
+                    s_lbl = QLabel()
+                    p_data["skills_layout"].addWidget(s_lbl)
+                    p_data["labels"][skill] = s_lbl
+                    
+                status_text = "<span style='color: #30d158;'>✔ Ready</span>" if is_ready else "<span style='color: #ff453a;'>⏳ 쿨타임 중</span>"
+                p_data["labels"][skill].setText(f"  • {skill}: {status_text}")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.old_pos = event.globalPosition().toPoint()
+            
+    def mouseMoveEvent(self, event):
+        if self.old_pos is not None:
+            delta = event.globalPosition().toPoint() - self.old_pos
+            self.move(self.x() + delta.x(), self.y() + delta.y())
+            self.old_pos = event.globalPosition().toPoint()
+            
+    def mouseReleaseEvent(self, event):
+        self.old_pos = None
+
+
 class SettingsModal(QDialog):
     def __init__(self, parent_window):
         super().__init__(parent_window)
@@ -187,11 +304,6 @@ class SettingsModal(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
         self.is_setting_target = None
-        
-        # Load temporary values from parent window
-        self.temp_follow = parent_window.hotkey_follow
-        self.temp_transparent = parent_window.hotkey_transparent
-        self.temp_hide = parent_window.hotkey_hide
         
         self.setStyleSheet("""
             #ModalContainer {
@@ -223,8 +335,39 @@ class SettingsModal(QDialog):
             QPushButton#SaveBtn:hover {
                 background-color: #0071e3;
             }
-            QPushButton:pressed {
-                transform: scale(0.96);
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px;
+                color: #ffffff;
+                padding: 4px 8px;
+                font-size: 12px;
+            }
+            QTabWidget::pane {
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px;
+                background: transparent;
+            }
+            QTabBar::tab {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-bottom-color: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                padding: 6px 16px;
+                color: #cccccc;
+                font-size: 12px;
+            }
+            QTabBar::tab:selected {
+                background: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+                border-bottom-color: rgba(28, 28, 30, 0.96);
+            }
+            QListWidget {
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px;
+                color: #ffffff;
             }
         """)
         
@@ -237,27 +380,67 @@ class SettingsModal(QDialog):
         container_layout.setContentsMargins(20, 20, 20, 20)
         container_layout.setSpacing(14)
         
-        # Lucide Settings Icon next to clean title label text (Replaces unicode emoji gear)
+        # Header Row
         title_layout_row = QHBoxLayout()
         title_layout_row.setSpacing(8)
         title_layout_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
         title_icon = QLabel()
         title_icon.setFixedSize(20, 20)
         title_icon.setPixmap(get_svg_icon(LUCIDE_SETTINGS_SVG).pixmap(20, 20))
-        
-        title_label = QLabel("펭구 줌인 설정")
+        title_label = QLabel("설정 및 쿨타임 동기화")
         title_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #ffffff;")
-        
         title_layout_row.addWidget(title_icon)
         title_layout_row.addWidget(title_label)
         container_layout.addLayout(title_layout_row)
         
-        # Grid layout for hotkey configurations
+        # Tab Control
+        self.tabs = QTabWidget()
+        
+        # Tab 1: General Hotkeys
+        tab_hotkeys = QWidget()
+        self.setup_hotkeys_tab(tab_hotkeys)
+        self.tabs.addTab(tab_hotkeys, "단축키")
+        
+        # Tab 2: Skill Cooldown Settings
+        tab_skills = QWidget()
+        self.setup_skills_tab(tab_skills)
+        self.tabs.addTab(tab_skills, "스킬 감지")
+        
+        # Tab 3: Network Party Settings
+        tab_network = QWidget()
+        self.setup_network_tab(tab_network)
+        self.tabs.addTab(tab_network, "파티 연동")
+        
+        container_layout.addWidget(self.tabs)
+        
+        # Bottom Actions
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        self.save_btn = QPushButton("확인")
+        self.save_btn.setObjectName("SaveBtn")
+        self.save_btn.clicked.connect(self.save_and_close)
+        btn_layout.addWidget(self.save_btn)
+        
+        container_layout.addLayout(btn_layout)
+        layout.addWidget(container)
+        
+        self.resize(460, 440)
+        self.old_pos = None
+
+    def setup_hotkeys_tab(self, tab):
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(12)
+        
         grid = QGridLayout()
         grid.setSpacing(10)
         
-        # 1. Follow Mouse Hotkey
+        self.temp_follow = self.parent_window.hotkey_follow
+        self.temp_transparent = self.parent_window.hotkey_transparent
+        self.temp_hide = self.parent_window.hotkey_hide
+        
+        # 1. Follow Hotkey
         lbl_follow = QLabel("마우스 따라오기:")
         lbl_follow.setStyleSheet("font-size: 13px; color: #cccccc;")
         self.btn_follow = QPushButton(self.get_display_text(self.temp_follow, "Ctrl+MiddleClick"))
@@ -281,32 +464,113 @@ class SettingsModal(QDialog):
         grid.addWidget(lbl_hide, 2, 0)
         grid.addWidget(self.btn_hide, 2, 1)
         
-        container_layout.addLayout(grid)
+        lay.addLayout(grid)
         
-        # Info label
-        info_label = QLabel("※ 변경할 버튼을 클릭한 뒤, 키보드 단축키 조합을 입력하십시오. ESC를 누르면 단축키를 해제하고 마우스 기본 휠 클릭으로 리셋합니다.")
-        info_label.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.45); line-height: 1.4;")
-        info_label.setWordWrap(True)
-        container_layout.addWidget(info_label)
+        info = QLabel("※ 단축키 지정 대기 상태에서 ESC를 누르면 마우스 기본 설정(휠 클릭 리셋 등)으로 해제 처리됩니다.")
+        info.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.4);")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        lay.addStretch()
+
+    def setup_skills_tab(self, tab):
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(10)
         
-        # Bottom Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
+        btn_row = QHBoxLayout()
+        self.add_skill_btn = QPushButton("스킬 추가")
+        self.add_skill_btn.clicked.connect(self.add_new_skill_slot)
+        btn_row.addWidget(self.add_skill_btn)
         
-        self.reset_btn = QPushButton("기본값 초기화")
-        self.reset_btn.clicked.connect(self.reset_all)
-        btn_layout.addWidget(self.reset_btn)
+        self.cap_area_btn = QPushButton("영역 지정")
+        self.cap_area_btn.clicked.connect(self.capture_selected_skill_area)
+        btn_row.addWidget(self.cap_area_btn)
         
-        self.save_btn = QPushButton("확인")
-        self.save_btn.setObjectName("SaveBtn")
-        self.save_btn.clicked.connect(self.save_and_close)
-        btn_layout.addWidget(self.save_btn)
+        self.del_skill_btn = QPushButton("삭제")
+        self.del_skill_btn.clicked.connect(self.delete_selected_skill)
+        btn_row.addWidget(self.del_skill_btn)
         
-        container_layout.addLayout(btn_layout)
-        layout.addWidget(container)
+        lay.addLayout(btn_row)
         
-        self.resize(350, 260)
-        self.old_pos = None
+        self.skill_list = QListWidget()
+        self.skill_list.currentRowChanged.connect(self.on_skill_selection_changed)
+        lay.addWidget(self.skill_list)
+        
+        # Populate existing slots
+        self.refresh_skill_list()
+        
+        self.lbl_selected_status = QLabel("선택된 스킬 없음 (Ready 스냅샷을 지정해 주셔야 활성화 판별이 시작됩니다.)")
+        self.lbl_selected_status.setStyleSheet("font-size: 11px; color: #ffd60a;")
+        self.lbl_selected_status.setWordWrap(True)
+        lay.addWidget(self.lbl_selected_status)
+
+    def setup_network_tab(self, tab):
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(10)
+        
+        # Character Name
+        char_row = QHBoxLayout()
+        char_row.addWidget(QLabel("캐릭터명:"))
+        self.txt_char_name = QLineEdit(self.parent_window.player_name)
+        char_row.addWidget(self.txt_char_name)
+        lay.addLayout(char_row)
+        
+        # Host Server Group
+        host_box = QFrame()
+        host_box.setStyleSheet("background-color: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 10px;")
+        host_lay = QVBoxLayout(host_box)
+        host_lay.setContentsMargins(8, 8, 8, 8)
+        
+        host_lbl = QLabel("<b>중계 방 만들기 (Host)</b>")
+        host_lbl.setStyleSheet("color: #0a84ff; font-size: 13px;")
+        host_lay.addWidget(host_lbl)
+        
+        srv_ctrl_row = QHBoxLayout()
+        self.btn_toggle_server = QPushButton("대기실 서버 가동")
+        self.btn_toggle_server.clicked.connect(self.toggle_local_server)
+        srv_ctrl_row.addWidget(self.btn_toggle_server)
+        self.lbl_server_status = QLabel("서버 상태: 꺼짐")
+        self.lbl_server_status.setStyleSheet("color: #aaaaaa;")
+        srv_ctrl_row.addWidget(self.lbl_server_status)
+        host_lay.addLayout(srv_ctrl_row)
+        
+        lay.addWidget(host_box)
+        
+        # Guest Connection Group
+        guest_box = QFrame()
+        guest_box.setStyleSheet("background-color: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 10px;")
+        guest_lay = QVBoxLayout(guest_box)
+        guest_lay.setContentsMargins(8, 8, 8, 8)
+        
+        guest_lbl = QLabel("<b>대기실 접속하기 (Join)</b>")
+        guest_lbl.setStyleSheet("color: #30d158; font-size: 13px;")
+        guest_lay.addWidget(guest_lbl)
+        
+        ip_row = QHBoxLayout()
+        ip_row.addWidget(QLabel("방장 IP주소:"))
+        self.txt_host_url = QLineEdit(self.parent_window.server_url)
+        ip_row.addWidget(self.txt_host_url)
+        guest_lay.addLayout(ip_row)
+        
+        conn_row = QHBoxLayout()
+        self.btn_toggle_client = QPushButton("방 접속하기")
+        self.btn_toggle_client.clicked.connect(self.toggle_client_connection)
+        conn_row.addWidget(self.btn_toggle_client)
+        self.lbl_client_status = QLabel("접속 상태: 대기")
+        self.lbl_client_status.setStyleSheet("color: #aaaaaa;")
+        conn_row.addWidget(self.lbl_client_status)
+        guest_lay.addLayout(conn_row)
+        
+        lay.addWidget(guest_box)
+        
+        # Party Panel Show Toggle
+        self.btn_show_panel = QPushButton("파티 현황 모니터판 켜기")
+        self.btn_show_panel.clicked.connect(self.toggle_party_panel_visible)
+        lay.addWidget(self.btn_show_panel)
+        
+        self.update_network_tab_texts()
+        lay.addStretch()
 
     def get_display_text(self, value, default_text):
         return value if value else default_text
@@ -320,24 +584,116 @@ class SettingsModal(QDialog):
         button.setText("키 입력 대기 중...")
         button.setStyleSheet("background-color: rgba(255, 214, 10, 0.2); color: #ffd60a; border: 1px solid rgba(255, 214, 10, 0.4);")
 
-    def reset_all(self):
-        self.temp_follow = None
-        self.temp_transparent = "Ctrl+Alt+T"
-        self.temp_hide = "Ctrl+Alt+H"
+    # Skill Logic
+    def refresh_skill_list(self):
+        self.skill_list.clear()
+        for name in self.parent_window.detector.slots.keys():
+            self.skill_list.addItem(name)
+
+    def add_new_skill_slot(self):
+        name, ok = QInputDialog.getText(self, "스킬 추가", "감지할 스킬 이름을 입력하세요:")
+        if ok and name.strip():
+            name = name.strip()
+            if name in self.parent_window.detector.slots:
+                QMessageBox.warning(self, "오류", "이미 존재하는 스킬명입니다.")
+                return
+            self.parent_window.detector.add_slot(name, None)
+            self.refresh_skill_list()
+
+    def delete_selected_skill(self):
+        curr = self.skill_list.currentItem()
+        if curr:
+            name = curr.text()
+            self.parent_window.detector.remove_slot(name)
+            self.refresh_skill_list()
+            self.lbl_selected_status.setText("선택된 스킬 없음")
+
+    def capture_selected_skill_area(self):
+        curr = self.skill_list.currentItem()
+        if not curr:
+            QMessageBox.warning(self, "선택 필요", "영역을 지정할 스킬을 목록에서 먼저 선택하세요.")
+            return
+            
+        self.hide()  # Hide modal momentarily
+        self.parent_window.start_cooldown_area_capture(curr.text(), self)
+
+    def on_skill_selection_changed(self, row):
+        curr = self.skill_list.currentItem()
+        if not curr:
+            self.lbl_selected_status.setText("선택된 스킬 없음")
+            return
+            
+        name = curr.text()
+        slot = self.parent_window.detector.slots.get(name)
+        if slot:
+            status = "좌표: 지정 완료" if slot.rect else "좌표: 미지정"
+            has_template = " Ready 스냅샷: 있음" if slot.template is not None else " Ready 스냅샷: 없음 (영역 지정 필요)"
+            self.lbl_selected_status.setText(f"[{name}] {status} | {has_template}")
+
+    # Network Logic
+    def update_network_tab_texts(self):
+        if self.parent_window.server_running:
+            self.btn_toggle_server.setText("서버 중지")
+            self.lbl_server_status.setText("서버 가동 중 (포트 9090)")
+            self.lbl_server_status.setStyleSheet("color: #30d158; font-weight: 600;")
+        else:
+            self.btn_toggle_server.setText("대기실 서버 가동")
+            self.lbl_server_status.setText("서버 상태: 꺼짐")
+            self.lbl_server_status.setStyleSheet("color: #aaaaaa;")
+            
+        if self.parent_window.client_running:
+            self.btn_toggle_client.setText("접속 끊기")
+            self.lbl_client_status.setText("동기화 연결 중")
+            self.lbl_client_status.setStyleSheet("color: #30d158; font-weight: 600;")
+        else:
+            self.btn_toggle_client.setText("방 접속하기")
+            self.lbl_client_status.setText("접속 상태: 대기")
+            self.lbl_client_status.setStyleSheet("color: #aaaaaa;")
+            
+        if self.parent_window.party_panel.isVisible():
+            self.btn_show_panel.setText("파티 현황 모니터판 끄기")
+        else:
+            self.btn_show_panel.setText("파티 현황 모니터판 켜기")
+
+    def toggle_local_server(self):
+        if self.parent_window.server_running:
+            self.parent_window.stop_party_server()
+        else:
+            self.parent_window.start_party_server()
+        self.update_network_tab_texts()
+
+    def toggle_client_connection(self):
+        char_name = self.txt_char_name.text().strip()
+        url = self.txt_host_url.text().strip()
         
-        self.btn_follow.setText("Ctrl+MiddleClick")
-        self.btn_transparent.setText("Ctrl+Alt+T")
-        self.btn_hide.setText("Ctrl+Alt+H")
+        if not char_name:
+            QMessageBox.warning(self, "이름 필요", "캐릭터명을 정확하게 기입하세요.")
+            return
+            
+        self.parent_window.player_name = char_name
+        self.parent_window.server_url = url
         
-        self.btn_follow.setStyleSheet("")
-        self.btn_transparent.setStyleSheet("")
-        self.btn_hide.setStyleSheet("")
-        self.is_setting_target = None
+        if self.parent_window.client_running:
+            self.parent_window.stop_party_client()
+        else:
+            self.parent_window.start_party_client()
+        self.update_network_tab_texts()
+
+    def toggle_party_panel_visible(self):
+        if self.parent_window.party_panel.isVisible():
+            self.parent_window.party_panel.hide()
+        else:
+            self.parent_window.party_panel.show()
+            self.parent_window.party_panel.activateWindow()
+        self.update_network_tab_texts()
 
     def save_and_close(self):
         self.parent_window.hotkey_follow = self.temp_follow
         self.parent_window.hotkey_transparent = self.temp_transparent
         self.parent_window.hotkey_hide = self.temp_hide
+        
+        self.parent_window.player_name = self.txt_char_name.text().strip()
+        self.parent_window.server_url = self.txt_host_url.text().strip()
         self.accept()
 
     def keyPressEvent(self, event):
@@ -601,13 +957,31 @@ class MagnifierWindow(QMainWindow):
                             Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        self.load_icon()
-        self.load_settings()
-        
         self.follow_mouse = True
         self.click_through = False
         self.last_capture_pos = QPoint(0, 0)
         self.is_setting_hotkey = False
+        
+        # Player states and settings
+        self.player_name = "플레이어"
+        self.server_url = "http://127.0.0.1:9090"
+        
+        # Initialize detector
+        self.detector = cooldown_detector.CooldownDetector()
+        self.detector.state_changed.connect(self.on_skill_state_changed)
+        self.detector.start(250)  # Scan every 250ms
+        
+        # Network objects
+        self.server = None
+        self.client = None
+        self.server_running = False
+        self.client_running = False
+        
+        # Floating party statuses panel
+        self.party_panel = PartyPanel()
+        
+        self.load_settings()
+        self.load_icon()
         
         self.bridge = InputBridge()
         self.bridge.zoom_changed.connect(self.handle_global_zoom)
@@ -625,7 +999,7 @@ class MagnifierWindow(QMainWindow):
         
         self.setup_ui()
         
-        # Apply native win32 SendMessageW to guarantee the taskbar icon displays 100% correctly from built-in SVG
+        # Apply native win32 SendMessageW to guarantee the taskbar icon displays correctly
         force_set_window_icon(int(self.winId()))
         
         self.sct = mss.mss()
@@ -671,10 +1045,12 @@ class MagnifierWindow(QMainWindow):
                     data = json.load(f)
                     self.zoom_factor = data.get('zoom_factor', 2.0)
                     self.opacity_value = data.get('opacity', 100)
-                    
                     self.hotkey_follow = data.get('hotkey_follow', None)
                     self.hotkey_transparent = data.get('hotkey_transparent', "Ctrl+Alt+T")
                     self.hotkey_hide = data.get('hotkey_hide', "Ctrl+Alt+H")
+                    
+                    self.player_name = data.get('player_name', "플레이어")
+                    self.server_url = data.get('server_url', "http://127.0.0.1:9090")
                     return
             except Exception:
                 pass
@@ -693,7 +1069,9 @@ class MagnifierWindow(QMainWindow):
                 'opacity': self.opacity_slider.value(),
                 'hotkey_follow': self.hotkey_follow,
                 'hotkey_transparent': self.hotkey_transparent,
-                'hotkey_hide': self.hotkey_hide
+                'hotkey_hide': self.hotkey_hide,
+                'player_name': self.player_name,
+                'server_url': self.server_url
             }
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
@@ -905,114 +1283,6 @@ class MagnifierWindow(QMainWindow):
         modal = SettingsModal(self)
         modal.exec()
 
-    def start_setting_hotkey(self):
-        self.is_setting_hotkey = True
-
-    def on_hotkey_set(self, key_name):
-        pass
-
-    def check_hotkey_match(self, parsed_parts, current_key_name, is_t_key, is_h_key):
-        target_key = parsed_parts[-1].lower()
-        req_ctrl = 'ctrl' in parsed_parts
-        req_alt = 'alt' in parsed_parts
-        
-        if self.ctrl_pressed != req_ctrl or self.alt_pressed != req_alt:
-            return False
-            
-        if target_key == 't' and is_t_key:
-            return True
-        if target_key == 'h' and is_h_key:
-            return True
-        if current_key_name == target_key:
-            return True
-            
-        return False
-
-    def on_key_press(self, key):
-        if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
-            self.ctrl_pressed = True
-        elif key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
-            self.alt_pressed = True
-            
-        try:
-            if hasattr(key, 'char') and key.char:
-                current_key_name = key.char.lower()
-            else:
-                current_key_name = str(key).replace('Key.', '').lower()
-        except Exception:
-            current_key_name = str(key).lower()
-            
-        is_t_key = False
-        is_h_key = False
-        if hasattr(key, 'vk'):
-            if key.vk == 84:
-                is_t_key = True
-            elif key.vk == 72:
-                is_h_key = True
-        
-        if not is_t_key and current_key_name in ['t', 'ㅅ']:
-            is_t_key = True
-        if not is_h_key and current_key_name in ['h', 'ㅗ']:
-            is_h_key = True
-
-        if self.is_setting_hotkey:
-            combo = []
-            if self.ctrl_pressed:
-                combo.append('Ctrl')
-            if self.alt_pressed:
-                combo.append('Alt')
-            
-            btn_key = current_key_name.upper()
-            if btn_key in ['CTRL_L', 'CTRL_R', 'ALT_L', 'ALT_R', 'SHIFT', 'SHIFT_R', 'CMD']:
-                return
-            
-            combo.append(btn_key)
-            final_hotkey = '+'.join(combo)
-            self.bridge.hotkey_set.emit(final_hotkey)
-            return
-
-        if self.hotkey_transparent:
-            parts = [p.lower() for p in self.hotkey_transparent.split('+')]
-            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
-                self.bridge.toggle_click_through.emit()
-                return
-
-        if self.hotkey_hide:
-            parts = [p.lower() for p in self.hotkey_hide.split('+')]
-            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
-                self.bridge.toggle_hide.emit()
-                return
-
-        if self.hotkey_follow:
-            parts = [p.lower() for p in self.hotkey_follow.split('+')]
-            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
-                self.bridge.toggle_follow.emit()
-                return
-
-    def on_key_release(self, key):
-        if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
-            self.ctrl_pressed = False
-        elif key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
-            self.alt_pressed = False
-
-    def on_global_scroll(self, x, y, dx, dy):
-        if self.ctrl_pressed:
-            self.bridge.zoom_changed.emit(1 if dy > 0 else -1)
-
-    def on_global_click(self, x, y, button, pressed):
-        if not pressed:
-            return
-        if self.hotkey_follow is None:
-            if button == mouse.Button.middle and self.ctrl_pressed:
-                self.bridge.toggle_follow.emit()
-
-    def handle_global_zoom(self, direction):
-        if direction > 0:
-            self.zoom_factor = min(20.0, self.zoom_factor + 0.5)
-        else:
-            self.zoom_factor = max(1.0, self.zoom_factor - 0.5)
-        self.zoom_slider.setValue(int(self.zoom_factor * 10))
-
     def show_help(self):
         modal = HelpModal(self)
         modal.exec()
@@ -1021,6 +1291,70 @@ class MagnifierWindow(QMainWindow):
         self.overlay = SelectionOverlay()
         self.overlay.areaSelected.connect(self.on_area_selected)
         self.overlay.show()
+
+    def start_cooldown_area_capture(self, skill_name, config_dialog):
+        self.cooldown_capture_name = skill_name
+        self.config_dialog_ref = config_dialog
+        self.overlay = SelectionOverlay()
+        self.overlay.areaSelected.connect(self.on_cooldown_area_captured)
+        self.overlay.show()
+
+    def on_cooldown_area_captured(self, rect):
+        try:
+            # Grabs the snapshot image as reference (Ready State)
+            with mss.mss() as sct:
+                x, y, w, h = rect.x(), rect.y(), rect.width(), rect.height()
+                monitor = {"top": y, "left": x, "width": w, "height": h}
+                sct_img = sct.grab(monitor)
+                img = Image.frombytes('RGB', sct_img.size, sct_img.bgra, 'raw', 'BGRX')
+                
+                # Add to detector
+                self.detector.add_slot(self.cooldown_capture_name, rect, threshold=0.85, template_img=img)
+        except Exception:
+            pass
+            
+        # Re-show the settings modal
+        if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref:
+            self.config_dialog_ref.show()
+            self.config_dialog_ref.refresh_skill_list()
+
+    def on_skill_state_changed(self, name, is_ready, similarity):
+        # Trigger alert sound on cooldown ready (rising edge)
+        if is_ready:
+            # 1000 Hz, 250 ms beep
+            winsound.Beep(1000, 250)
+            
+        # Send update to party server if connected
+        if self.client_running and self.client:
+            self.client.send_update(name, is_ready)
+
+    # Server hosting control
+    def start_party_server(self):
+        self.server = network_manager.CooldownServer()
+        self.server.start()
+        self.server_running = True
+
+    def stop_party_server(self):
+        if self.server:
+            self.server.stop()
+            self.server = None
+        self.server_running = False
+
+    # Client networking control
+    def start_party_client(self):
+        self.client = network_manager.CooldownClient(
+            server_url=self.server_url, 
+            player_name=self.player_name
+        )
+        self.client.status_updated.connect(self.party_panel.update_states)
+        self.client.start()
+        self.client_running = True
+
+    def stop_party_client(self):
+        if self.client:
+            self.client.stop()
+            self.client = None
+        self.client_running = False
 
     def on_area_selected(self, rect):
         self.follow_mouse = False
@@ -1132,6 +1466,95 @@ class MagnifierWindow(QMainWindow):
         except Exception:
             pass
 
+    def check_hotkey_match(self, parsed_parts, current_key_name, is_t_key, is_h_key):
+        target_key = parsed_parts[-1].lower()
+        req_ctrl = 'ctrl' in parsed_parts
+        req_alt = 'alt' in parsed_parts
+        
+        if self.ctrl_pressed != req_ctrl or self.alt_pressed != req_alt:
+            return False
+            
+        if target_key == 't' and is_t_key:
+            return True
+        if target_key == 'h' and is_h_key:
+            return True
+        if current_key_name == target_key:
+            return True
+            
+        return False
+
+    def on_key_press(self, key):
+        if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
+            self.ctrl_pressed = True
+        elif key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
+            self.alt_pressed = True
+            
+        try:
+            if hasattr(key, 'char') and key.char:
+                current_key_name = key.char.lower()
+            else:
+                current_key_name = str(key).replace('Key.', '').lower()
+        except Exception:
+            current_key_name = str(key).lower()
+            
+        is_t_key = False
+        is_h_key = False
+        if hasattr(key, 'vk'):
+            if key.vk == 84:
+                is_t_key = True
+            elif key.vk == 72:
+                is_h_key = True
+        
+        if not is_t_key and current_key_name in ['t', 'ㅅ']:
+            is_t_key = True
+        if not is_h_key and current_key_name in ['h', 'ㅗ']:
+            is_h_key = True
+
+        if self.is_setting_hotkey:
+            return
+
+        if self.hotkey_transparent:
+            parts = [p.lower() for p in self.hotkey_transparent.split('+')]
+            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
+                self.bridge.toggle_click_through.emit()
+                return
+
+        if self.hotkey_hide:
+            parts = [p.lower() for p in self.hotkey_hide.split('+')]
+            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
+                self.bridge.toggle_hide.emit()
+                return
+
+        if self.hotkey_follow:
+            parts = [p.lower() for p in self.hotkey_follow.split('+')]
+            if self.check_hotkey_match(parts, current_key_name, is_t_key, is_h_key):
+                self.bridge.toggle_follow.emit()
+                return
+
+    def on_key_release(self, key):
+        if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
+            self.ctrl_pressed = False
+        elif key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
+            self.alt_pressed = False
+
+    def on_global_scroll(self, x, y, dx, dy):
+        if self.ctrl_pressed:
+            self.bridge.zoom_changed.emit(1 if dy > 0 else -1)
+
+    def on_global_click(self, x, y, button, pressed):
+        if not pressed:
+            return
+        if self.hotkey_follow is None:
+            if button == mouse.Button.middle and self.ctrl_pressed:
+                self.bridge.toggle_follow.emit()
+
+    def handle_global_zoom(self, direction):
+        if direction > 0:
+            self.zoom_factor = min(20.0, self.zoom_factor + 0.5)
+        else:
+            self.zoom_factor = max(1.0, self.zoom_factor - 0.5)
+        self.zoom_slider.setValue(int(self.zoom_factor * 10))
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.click_through:
@@ -1155,6 +1578,10 @@ class MagnifierWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.save_settings()
+        self.detector.stop()
+        self.stop_party_server()
+        self.stop_party_client()
+        self.party_panel.close()
         self.mouse_listener.stop()
         self.key_listener.stop()
         super().closeEvent(event)
@@ -1162,7 +1589,7 @@ class MagnifierWindow(QMainWindow):
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     
-    # Set global app icon directly from built-in high quality original penguin SVG (Bypasses all local file resolution bugs!)
+    # Set global app icon directly from built-in high quality original penguin SVG
     try:
         renderer = QSvgRenderer(QByteArray(LUCIDE_PENGUIN_SVG.encode('utf-8')))
         if renderer.isValid():
