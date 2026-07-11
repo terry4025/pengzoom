@@ -94,6 +94,11 @@ class CooldownClient(QObject):
         self.polling_thread = None
         self.is_running = False
         
+        # Create a custom urllib opener that explicitly bypasses system proxy settings.
+        # This fixes WinError connection timeouts (urlopen error timed out) caused by proxies trying to route 127.0.0.1/localhost.
+        proxy_support = urllib.request.ProxyHandler({})
+        self.opener = urllib.request.build_opener(proxy_support)
+        
     def start(self):
         self.is_running = True
         self.polling_thread = threading.Thread(target=self.poll_loop, daemon=True)
@@ -119,7 +124,7 @@ class CooldownClient(QObject):
                     headers={'Content-Type': 'application/json'},
                     method="POST"
                 )
-                with urllib.request.urlopen(req, timeout=2.0) as res:
+                with self.opener.open(req, timeout=2.0) as res:
                     res.read()
             except Exception as e:
                 self.connection_failed.emit(f"업데이트 전송 실패: {str(e)}")
@@ -131,7 +136,7 @@ class CooldownClient(QObject):
             url = f"{self.server_url}/status"
             try:
                 req = urllib.request.Request(url, method="GET")
-                with urllib.request.urlopen(req, timeout=2.0) as res:
+                with self.opener.open(req, timeout=2.0) as res:
                     response_data = json.loads(res.read().decode("utf-8"))
                     self.status_updated.emit(response_data)
             except Exception as e:
