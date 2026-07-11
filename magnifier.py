@@ -1420,17 +1420,44 @@ class MagnifierWindow(QMainWindow):
         
         self.main_layout.addWidget(self.bottom_control_widget)
 
-    # Dynamic visibility controller for minimalist HUD screen on click-through
+    # Dynamic visibility controller for minimalist HUD screen on click-through (now hides container border as well!)
     def update_ui_visibility(self):
         should_hide = self.click_through and self.hide_ui_on_transparent
+        
+        # 1. Toggle control bar widgets
         self.top_control_widget.setVisible(not should_hide)
         self.bottom_control_widget.setVisible(not should_hide)
+        
+        # 2. Toggle outer ResizableContainer frame style and margins
+        if should_hide:
+            # Completely transparent background, borders and hide the resize grip
+            self.container.setStyleSheet("""
+                #MainContainer {
+                    background-color: transparent;
+                    border: none;
+                }
+            """)
+            self.main_layout.setContentsMargins(0, 0, 0, 0)
+            self.container.grip.hide()
+            # Remove live image frame border/radius to blend perfectly with background
+            self.label.setStyleSheet('border-radius: 0px; background-color: #000000; border: none;')
+        else:
+            # Restore round corners, outer border frame and resize grip
+            self.container.setStyleSheet("""
+                #MainContainer {
+                    background-color: rgba(28, 28, 30, 0.90);
+                    border: 1.5px solid rgba(255, 255, 255, 0.12);
+                    border-radius: 18px;
+                }
+            """)
+            self.main_layout.setContentsMargins(16, 16, 16, 16)
+            self.container.grip.show()
+            self.label.setStyleSheet('border-radius: 12px; background-color: #000000; border: 1px solid rgba(255, 255, 255, 0.1);')
 
     def start_selection(self):
         self.pause_listeners()
         self.selection_overlay = SelectionOverlay()
         self.selection_overlay.areaSelected.connect(self.on_area_selected)
-        # Re-enable global mouse hook listeners after selection area layout is finalized or closed
         self.selection_overlay.destroyed.connect(self.resume_listeners)
         self.selection_overlay.show()
 
@@ -1464,7 +1491,6 @@ class MagnifierWindow(QMainWindow):
 
     def on_skill_state_changed(self, name, is_ready, similarity):
         if is_ready:
-            # Play beep sound asynchronously in background thread to prevent GUI/mouse thread blocking (fixes 1fps issue!)
             def play_beep():
                 winsound.Beep(1000, 250)
             threading.Thread(target=play_beep, daemon=True).start()
@@ -1625,9 +1651,6 @@ class MagnifierWindow(QMainWindow):
             self.label.setPixmap(pixmap)
         except Exception:
             pass
-
-    def get_display_text(self, val, fallback):
-        return val if val else fallback
 
     def check_hotkey_match(self, parsed_parts, current_key_name, is_t_key, is_h_key):
         target_key = parsed_parts[-1].lower()
