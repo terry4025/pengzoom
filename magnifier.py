@@ -1151,7 +1151,7 @@ class SettingsModal(QDialog):
         guest_lay.addLayout(guest_title_lay)
         
         ip_row = QHBoxLayout()
-        ip_lbl = QLabel("방장 IP주소:")
+        ip_lbl = QLabel("서버 주소 (URL):")
         ip_lbl.setStyleSheet("border: none; background: transparent; font-size: 12px; color: #cccccc;")
         ip_row.addWidget(ip_lbl)
         self.txt_host_url = QLineEdit(self.parent_window.server_url)
@@ -1166,6 +1166,25 @@ class SettingsModal(QDialog):
         """)
         ip_row.addWidget(self.txt_host_url)
         guest_lay.addLayout(ip_row)
+        
+        # Room ID Row
+        room_row = QHBoxLayout()
+        room_lbl = QLabel("방 코드 (Room ID):")
+        room_lbl.setStyleSheet("border: none; background: transparent; font-size: 12px; color: #cccccc;")
+        room_row.addWidget(room_lbl)
+        room_val = getattr(self.parent_window, "room_id", "default")
+        self.txt_room_id = QLineEdit(room_val)
+        self.txt_room_id.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+                color: #ffffff;
+                padding: 4px 8px;
+            }
+        """)
+        room_row.addWidget(self.txt_room_id)
+        guest_lay.addLayout(room_row)
         
         conn_row = QHBoxLayout()
         conn_row.setSpacing(10)
@@ -1509,6 +1528,7 @@ class SettingsModal(QDialog):
         
         self.parent_window.player_name = self.txt_char_name.text().strip()
         self.parent_window.server_url = self.txt_host_url.text().strip()
+        self.parent_window.room_id = self.txt_room_id.text().strip()
         self.parent_window.hide_ui_on_transparent = self.chk_hide_ui_on_transparent.isChecked()
         
         # Apply updated ui hiding right away
@@ -1831,7 +1851,8 @@ class MagnifierWindow(QMainWindow):
         
         # Player states and settings
         self.player_name = "플레이어"
-        self.server_url = "http://127.0.0.1:19090"
+        self.server_url = "https://pengzoom-pro-relay.onrender.com"
+        self.room_id = "default"
         self.hide_ui_on_transparent = False  # Feature Toggle
         
         # Initialize detector
@@ -1956,7 +1977,8 @@ class MagnifierWindow(QMainWindow):
         self.hotkey_transparent = "Ctrl+Alt+T"
         self.hotkey_hide = "Ctrl+Alt+H"
         self.player_name = "플레이어"
-        self.server_url = "http://127.0.0.1:19090"
+        self.server_url = "https://pengzoom-pro-relay.onrender.com"
+        self.room_id = "default"
         self.hide_ui_on_transparent = False
         
         if os.path.exists(config_path):
@@ -1970,9 +1992,10 @@ class MagnifierWindow(QMainWindow):
                     self.hotkey_hide = data.get('hotkey_hide', "Ctrl+Alt+H")
                     
                     self.player_name = data.get('player_name', "플레이어")
-                    self.server_url = data.get('server_url', "http://127.0.0.1:19090")
+                    self.server_url = data.get('server_url', "https://pengzoom-pro-relay.onrender.com")
                     if ":9090" in self.server_url:
                         self.server_url = self.server_url.replace(":9090", ":19090")
+                    self.room_id = data.get('room_id', "default")
                     self.hide_ui_on_transparent = data.get('hide_ui_on_transparent', False)
                     
                     # Restore party panel position and size
@@ -2083,6 +2106,7 @@ class MagnifierWindow(QMainWindow):
                 'hotkey_hide': self.hotkey_hide,
                 'player_name': self.player_name,
                 'server_url': self.server_url,
+                'room_id': self.room_id,
                 'hide_ui_on_transparent': self.hide_ui_on_transparent,
                 'skills': skills_data,
                 'party_panel_pos': party_pos,
@@ -2481,7 +2505,8 @@ class MagnifierWindow(QMainWindow):
         try:
             self.client = network_manager.CooldownClient(
                 server_url=self.server_url, 
-                player_name=self.player_name
+                player_name=self.player_name,
+                room_id=self.room_id
             )
             self.client.status_updated.connect(self.party_panel.update_states)
             self.client.connection_failed.connect(self.on_client_connection_failed)
