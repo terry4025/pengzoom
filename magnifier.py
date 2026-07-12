@@ -1147,9 +1147,9 @@ class SettingsModal(QDialog):
         self.lbl_client_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent; font-size: 13px;")
         conn_row.addWidget(self.lbl_client_status, 0, Qt.AlignmentFlag.AlignVCenter)
         conn_row.addStretch()
-        guest_lay.addLayout(conn_row)
+        config_lay.addLayout(conn_row)
         
-        lay.addWidget(guest_box)
+        lay.addWidget(config_box)
         
         # Party Panel Show Toggle
         self.btn_show_panel = QPushButton("파티 현황 켜기")
