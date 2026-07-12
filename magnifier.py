@@ -1911,6 +1911,8 @@ class MagnifierWindow(QMainWindow):
                     
                     self.player_name = data.get('player_name', "플레이어")
                     self.server_url = data.get('server_url', "https://pengzoom-pro-relay.onrender.com")
+                    if "127.0.0.1" in self.server_url or "localhost" in self.server_url or self.server_url.startswith("http://"):
+                        self.server_url = "https://pengzoom-pro-relay.onrender.com"
                     if ":9090" in self.server_url:
                         self.server_url = self.server_url.replace(":9090", ":19090")
                     self.room_id = data.get('room_id', "default")
