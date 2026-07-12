@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout,
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
                              QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
                              QCheckBox)
-from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject, QSize
+from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject, QSize, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence, QWheelEvent
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
@@ -164,6 +164,62 @@ LUCIDE_JOIN_SVG = """
 </svg>
 """
 
+LUCIDE_USER_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#0a84ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+  <circle cx="12" cy="7" r="4"/>
+</svg>
+"""
+
+LUCIDE_CHECK_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#30d158" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+  <polyline points="20 6 9 17 4 12"/>
+</svg>
+"""
+
+LUCIDE_CLOCK_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ff453a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="10"/>
+  <polyline points="12 6 12 12 16 14"/>
+</svg>
+"""
+
+LUCIDE_STATUS_ON_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#30d158" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="10"/>
+  <circle cx="12" cy="12" r="3" fill="#30d158"/>
+</svg>
+"""
+
+LUCIDE_STATUS_OFF_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#8e8e93" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="10"/>
+</svg>
+"""
+
+LUCIDE_LINKED_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#30d158" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+</svg>
+"""
+
+LUCIDE_UNLINKED_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#8e8e93" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="m18.84 18.84-3-3m-1.54-1.54-1.72 1.72a5 5 0 0 1-7.07-7.07l1.71-1.71"/>
+  <path d="M14 11a5 5 0 0 0-7.54-.54l-1.3 1.3M10 13a5 5 0 0 0 7.54.54l1.3-1.3"/>
+  <line x1="2" y1="2" x2="22" y2="22"/>
+</svg>
+"""
+
+LUCIDE_ERROR_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ff453a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="10"/>
+  <line x1="15" y1="9" x2="9" y2="15"/>
+  <line x1="9" y1="9" x2="15" y2="15"/>
+</svg>
+"""
+
 def get_svg_icon(svg_str):
     try:
         renderer = QSvgRenderer(QByteArray(svg_str.encode('utf-8')))
@@ -179,12 +235,13 @@ def get_svg_icon(svg_str):
 # Dynamic renderer helper that guarantees no border half-cuts by drawing directly inside a clean QPixmap with anti-aliasing
 def get_svg_pixmap(svg_str, size=18):
     try:
+        from PyQt6.QtCore import QRectF
         renderer = QSvgRenderer(QByteArray(svg_str.encode('utf-8')))
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        renderer.render(painter)
+        renderer.render(painter, QRectF(0.0, 0.0, float(size), float(size)))
         painter.end()
         return pixmap
     except Exception:
@@ -330,9 +387,12 @@ class InputBridge(QObject):
     toggle_hide = pyqtSignal()
 
 # Floating transparent window displaying party skill statuses
+# Floating transparent window displaying party skill statuses
 class PartyPanel(QWidget):
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__()  # 부모 전달 안 함 → 독립 윈도우 (메인 최소화 시 같이 안 숨겨짐)
+        self.parent_window = parent
+        self.panel_click_through = False
         self.setWindowTitle("파티원 쿨타임 현황")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
@@ -341,19 +401,29 @@ class PartyPanel(QWidget):
         
         self.setStyleSheet("""
             #Container {
-                background-color: rgba(28, 28, 30, 0.85);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 12px;
+                background-color: rgba(20, 20, 22, 0.90);
+                border: 1.5px solid rgba(255, 255, 255, 0.12);
+                border-radius: 14px;
             }
             QLabel {
                 color: #ffffff;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                font-size: 12px;
             }
             QLabel#Title {
-                font-size: 13px;
-                font-weight: 600;
+                font-size: 14px;
+                font-weight: 700;
                 color: #0a84ff;
+            }
+            QFrame.PlayerCard {
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 10px;
+                margin-top: 2px;
+                margin-bottom: 2px;
+            }
+            QFrame.SkillBadge {
+                border-radius: 6px;
+                padding: 4px 8px;
             }
         """)
         
@@ -363,20 +433,47 @@ class PartyPanel(QWidget):
         container = QFrame()
         container.setObjectName("Container")
         self.container_layout = QVBoxLayout(container)
-        self.container_layout.setContentsMargins(12, 12, 12, 12)
-        self.container_layout.setSpacing(6)
+        self.container_layout.setContentsMargins(14, 14, 14, 14)
+        self.container_layout.setSpacing(10)
         
-        title = QLabel("파티원 스킬 현황")
+        header_lay = QHBoxLayout()
+        header_lay.setSpacing(6)
+        
+        header_icon = QLabel()
+        header_icon.setFixedSize(18, 18)
+        header_icon.setStyleSheet("border: none; background: transparent;")
+        header_icon.setPixmap(get_svg_pixmap(LUCIDE_HOST_SVG, 18))
+        
+        title = QLabel("파티 스킬 모니터")
         title.setObjectName("Title")
-        self.container_layout.addWidget(title)
+        
+        header_lay.addWidget(header_icon)
+        header_lay.addWidget(title)
+        header_lay.addStretch()
+        self.container_layout.addLayout(header_lay)
         
         self.list_layout = QVBoxLayout()
+        self.list_layout.setSpacing(8)
         self.container_layout.addLayout(self.list_layout)
         
         layout.addWidget(container)
-        self.resize(220, 300)
+        self.resize(240, 320)
         self.old_pos = None
         self.widgets = {}
+        
+        # Sizing and transparency configuration
+        self.panel_opacity = 90
+        self.setWindowOpacity(self.panel_opacity / 100.0)
+        self.setMouseTracking(True)
+        self.resize_dir = None
+        self.drag_position = None
+        
+        # Real-time tick timer for countdown displays
+        from PyQt6.QtCore import QTimer
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.tick_timers)
+        self.timer.start(100)  # 100ms precision
+
 
     def update_states(self, party_states):
         current_players = set(party_states.keys())
@@ -388,54 +485,221 @@ class PartyPanel(QWidget):
         for player, skills in party_states.items():
             if player not in self.widgets:
                 player_widget = QFrame()
-                player_widget.setStyleSheet("border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 4px;")
-                p_lay = QVBoxLayout(player_widget)
-                p_lay.setContentsMargins(0, 4, 0, 4)
+                player_widget.setProperty("class", "PlayerCard")
+                player_widget.setObjectName("PlayerCardWidget")
                 
-                name_lbl = QLabel(f"👤 {player}")
-                name_lbl.setStyleSheet("font-weight: 600; color: #ffffff;")
-                p_lay.addWidget(name_lbl)
+                p_lay = QVBoxLayout(player_widget)
+                p_lay.setContentsMargins(10, 8, 10, 8)
+                p_lay.setSpacing(6)
+                
+                name_row = QHBoxLayout()
+                name_row.setSpacing(6)
+                
+                u_icon = QLabel()
+                u_icon.setFixedSize(14, 14)
+                u_icon.setStyleSheet("border: none; background: transparent;")
+                u_icon.setPixmap(get_svg_pixmap(LUCIDE_USER_SVG, 14))
+                
+                name_lbl = QLabel(player)
+                name_lbl.setStyleSheet("font-weight: 700; color: #ffffff; font-size: 13px;")
+                
+                name_row.addWidget(u_icon)
+                name_row.addWidget(name_lbl)
+                name_row.addStretch()
+                p_lay.addLayout(name_row)
                 
                 skills_lay = QVBoxLayout()
-                skills_lay.setSpacing(2)
+                skills_lay.setSpacing(4)
                 p_lay.addLayout(skills_lay)
                 
                 self.list_layout.addWidget(player_widget)
                 self.widgets[player] = {
                     "widget": player_widget,
                     "skills_layout": skills_lay,
-                    "labels": {}
+                    "skill_widgets": {}
                 }
                 
             p_data = self.widgets[player]
             
-            for s in list(p_data["labels"].keys()):
+            for s in list(p_data["skill_widgets"].keys()):
                 if s not in skills:
-                    p_data["labels"][s].deleteLater()
-                    del p_data["labels"][s]
+                    p_data["skill_widgets"][s]["badge"].deleteLater()
+                    del p_data["skill_widgets"][s]
                     
             for skill, s_info in skills.items():
                 is_ready = s_info.get("is_ready", True)
-                if skill not in p_data["labels"]:
-                    s_lbl = QLabel()
-                    p_data["skills_layout"].addWidget(s_lbl)
-                    p_data["labels"][skill] = s_lbl
+                cooldown_duration = s_info.get("cooldown_duration", 0)
+                timestamp = s_info.get("timestamp", 0.0)
+                
+                if skill not in p_data["skill_widgets"]:
+                    badge = QFrame()
+                    badge.setProperty("class", "SkillBadge")
+                    b_lay = QHBoxLayout(badge)
+                    b_lay.setContentsMargins(6, 4, 6, 4)
+                    b_lay.setSpacing(6)
                     
-                status_text = "<span style='color: #30d158;'>✔ Ready</span>" if is_ready else "<span style='color: #ff453a;'>⏳ 쿨타임 중</span>"
-                p_data["labels"][skill].setText(f"  • {skill}: {status_text}")
+                    status_icon = QLabel()
+                    status_icon.setFixedSize(12, 12)
+                    status_icon.setStyleSheet("border: none; background: transparent;")
+                    
+                    skill_lbl = QLabel(skill)
+                    skill_lbl.setStyleSheet("font-size: 12px; font-weight: 500; color: #ffffff;")
+                    
+                    status_text_lbl = QLabel()
+                    status_text_lbl.setStyleSheet("font-size: 11px; font-weight: 600;")
+                    
+                    b_lay.addWidget(status_icon)
+                    b_lay.addWidget(skill_lbl)
+                    b_lay.addStretch()
+                    b_lay.addWidget(status_text_lbl)
+                    
+                    p_data["skills_layout"].addWidget(badge)
+                    p_data["skill_widgets"][skill] = {
+                        "badge": badge,
+                        "status_icon": status_icon,
+                        "status_text_lbl": status_text_lbl,
+                        "is_ready": is_ready,
+                        "cooldown_duration": cooldown_duration,
+                        "timestamp": timestamp,
+                        "ui_ready_state": None
+                    }
+                
+                s_widgets = p_data["skill_widgets"][skill]
+                s_widgets["is_ready"] = is_ready
+                s_widgets["cooldown_duration"] = cooldown_duration
+                s_widgets["timestamp"] = timestamp
+
+    def tick_timers(self):
+        import time
+        import math
+        current_time = time.time()
+        
+        for player, p_data in list(self.widgets.items()):
+            for skill, s_widgets in list(p_data["skill_widgets"].items()):
+                is_ready = s_widgets["is_ready"]
+                cooldown_duration = s_widgets["cooldown_duration"]
+                timestamp = s_widgets["timestamp"]
+                
+                remaining = 0
+                if not is_ready and cooldown_duration > 0:
+                    elapsed = current_time - timestamp
+                    remaining = max(0.0, cooldown_duration - elapsed)
+                
+                visually_ready = is_ready or (cooldown_duration > 0 and remaining <= 0)
+                
+                if visually_ready:
+                    if s_widgets["ui_ready_state"] != True:
+                        s_widgets["ui_ready_state"] = True
+                        s_widgets["badge"].setStyleSheet("""
+                            QFrame.SkillBadge {
+                                background-color: rgba(48, 209, 88, 0.08);
+                                border: 1px solid rgba(48, 209, 88, 0.25);
+                            }
+                        """)
+                        s_widgets["status_icon"].setPixmap(get_svg_pixmap(LUCIDE_CHECK_SVG, 12))
+                        s_widgets["status_text_lbl"].setText("Ready")
+                        s_widgets["status_text_lbl"].setStyleSheet("color: #30d158;")
+                else:
+                    if s_widgets["ui_ready_state"] != False:
+                        s_widgets["ui_ready_state"] = False
+                        s_widgets["badge"].setStyleSheet("""
+                            QFrame.SkillBadge {
+                                background-color: rgba(255, 69, 58, 0.08);
+                                border: 1px solid rgba(255, 69, 58, 0.25);
+                            }
+                        """)
+                        s_widgets["status_icon"].setPixmap(get_svg_pixmap(LUCIDE_CLOCK_SVG, 12))
+                        s_widgets["status_text_lbl"].setStyleSheet("color: #ff453a;")
+                    
+                    if cooldown_duration > 0:
+                        s_widgets["status_text_lbl"].setText(f"{int(math.ceil(remaining))}s")
+                    else:
+                        s_widgets["status_text_lbl"].setText("Cooldown")
 
     def mousePressEvent(self, event):
+        if self.panel_click_through:
+            return
+            
         if event.button() == Qt.MouseButton.LeftButton:
-            self.old_pos = event.globalPosition().toPoint()
+            pos = event.position().toPoint()
+            rect = self.rect()
+            border = 10
+            
+            # Check edge areas for resizing
+            is_right = pos.x() >= rect.width() - border
+            is_bottom = pos.y() >= rect.height() - border
+            
+            if is_right and is_bottom:
+                self.resize_dir = "BottomRight"
+            elif is_right:
+                self.resize_dir = "Right"
+            elif is_bottom:
+                self.resize_dir = "Bottom"
+            else:
+                self.resize_dir = None
+                self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             
     def mouseMoveEvent(self, event):
-        if self.old_pos is not None:
-            delta = event.globalPosition().toPoint() - self.old_pos
-            self.move(self.x() + delta.x(), self.y() + delta.y())
-            self.old_pos = event.globalPosition().toPoint()
+        if self.panel_click_through:
+            return
+            
+        pos = event.position().toPoint()
+        rect = self.rect()
+        border = 10
+        
+        # Cursor styling when hovering over borders (Only when not clicking)
+        if event.buttons() == Qt.MouseButton.NoButton:
+            is_right = pos.x() >= rect.width() - border
+            is_bottom = pos.y() >= rect.height() - border
+            
+            if is_right and is_bottom:
+                self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+            elif is_right:
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+            elif is_bottom:
+                self.setCursor(Qt.CursorShape.SizeVerCursor)
+            else:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                
+        # Perform resize or move operations
+        elif event.buttons() == Qt.MouseButton.LeftButton:
+            global_pos = event.globalPosition().toPoint()
+            if self.resize_dir == "BottomRight":
+                w = max(150, global_pos.x() - self.x())
+                h = max(100, global_pos.y() - self.y())
+                self.resize(w, h)
+            elif self.resize_dir == "Right":
+                w = max(150, global_pos.x() - self.x())
+                self.resize(w, self.height())
+            elif self.resize_dir == "Bottom":
+                h = max(100, global_pos.y() - self.y())
+                self.resize(self.width(), h)
+            elif self.drag_position is not None:
+                self.move(global_pos - self.drag_position)
             
     def mouseReleaseEvent(self, event):
         self.old_pos = None
+        self.resize_dir = None
+        self.drag_position = None
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        if self.parent_window:
+            self.parent_window.save_settings()
+            
+    def closeEvent(self, event):
+        if self.parent_window:
+            self.parent_window.save_settings()
+        super().closeEvent(event)
+
+    def set_click_through(self, enabled):
+        self.panel_click_through = enabled
+        hwnd = int(self.winId())
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        if enabled:
+            new_style = style | WS_EX_TRANSPARENT | WS_EX_LAYERED
+        else:
+            new_style = style & ~WS_EX_TRANSPARENT
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
+        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)
 
 
 class SettingsModal(QDialog):
@@ -447,6 +711,7 @@ class SettingsModal(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
         self.is_setting_target = None
+
         
         self.setStyleSheet("""
             #ModalContainer {
@@ -659,9 +924,78 @@ class SettingsModal(QDialog):
         
         lay.addLayout(btn_row)
         
+        # Horizontal layout to split list and preview panel
+        list_preview_lay = QHBoxLayout()
+        list_preview_lay.setSpacing(10)
+        
         self.skill_list = QListWidget()
         self.skill_list.currentRowChanged.connect(self.on_skill_selection_changed)
-        lay.addWidget(self.skill_list)
+        list_preview_lay.addWidget(self.skill_list, 3) # Ratio 3
+        
+        # Preview Frame for captured template image
+        self.preview_box = QFrame()
+        self.preview_box.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px;
+            }
+            QLabel {
+                border: none;
+                background: transparent;
+            }
+        """)
+        preview_lay = QVBoxLayout(self.preview_box)
+        preview_lay.setContentsMargins(8, 8, 8, 8)
+        preview_lay.setSpacing(6)
+        preview_lay.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        
+        lbl_preview_title = QLabel("Ready 스냅샷")
+        lbl_preview_title.setStyleSheet("font-size: 11px; font-weight: bold; color: #aaaaaa;")
+        lbl_preview_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_lay.addWidget(lbl_preview_title)
+        
+        self.lbl_skill_img = QLabel("스냅샷 없음\n(영역 지정 필요)")
+        self.lbl_skill_img.setFixedSize(96, 96)
+        self.lbl_skill_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_skill_img.setStyleSheet("""
+            QLabel {
+                background-color: rgba(0, 0, 0, 0.4);
+                border: 1px dashed rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                color: rgba(255, 255, 255, 0.3);
+                font-size: 10px;
+            }
+        """)
+        self.lbl_skill_img.setWordWrap(True)
+        preview_lay.addWidget(self.lbl_skill_img)
+        
+        # Cooldown duration spinbox UI
+        cooldown_lbl = QLabel("쿨타임 설정(초)")
+        cooldown_lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #aaaaaa; margin-top: 10px;")
+        cooldown_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_lay.addWidget(cooldown_lbl)
+        
+        self.spin_cooldown = QSpinBox()
+        self.spin_cooldown.setRange(0, 3600)
+        self.spin_cooldown.setSuffix(" 초")
+        self.spin_cooldown.setValue(0)
+        self.spin_cooldown.setStyleSheet("""
+            QSpinBox {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 6px;
+                color: #ffffff;
+                padding: 4px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+        """)
+        self.spin_cooldown.valueChanged.connect(self.on_cooldown_value_changed)
+        preview_lay.addWidget(self.spin_cooldown)
+        
+        list_preview_lay.addWidget(self.preview_box, 2) # Ratio 2
+        lay.addLayout(list_preview_lay)
         
         # Populate existing slots
         self.refresh_skill_list()
@@ -678,9 +1012,19 @@ class SettingsModal(QDialog):
         
         # Character Name Row
         char_row = QHBoxLayout()
-        char_lbl = QLabel("👤 캐릭터명:")
-        char_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
-        char_row.addWidget(char_lbl)
+        char_row.setSpacing(6)
+        
+        lbl_char_icon = QLabel()
+        lbl_char_icon.setFixedSize(14, 14)
+        lbl_char_icon.setScaledContents(True)
+        lbl_char_icon.setStyleSheet("border: none; background: transparent; padding: 0px; margin: 0px;")
+        lbl_char_icon.setPixmap(get_svg_pixmap(LUCIDE_USER_SVG, 14))
+        char_row.addWidget(lbl_char_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        
+        char_lbl = QLabel("캐릭터명:")
+        char_lbl.setStyleSheet("font-weight: bold; font-size: 13px; border: none; background: transparent;")
+        char_row.addWidget(char_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        
         self.txt_char_name = QLineEdit(self.parent_window.player_name)
         self.txt_char_name.setStyleSheet("""
             QLineEdit {
@@ -692,7 +1036,7 @@ class SettingsModal(QDialog):
                 font-size: 13px;
             }
         """)
-        char_row.addWidget(self.txt_char_name)
+        char_row.addWidget(self.txt_char_name, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addLayout(char_row)
         
         # Host Server Group
@@ -712,10 +1056,8 @@ class SettingsModal(QDialog):
         host_title_lay = QHBoxLayout()
         host_title_lay.setSpacing(6)
         
-        # SVG icon rendering fixes for Host and Join labels
         host_icon = QLabel()
         host_icon.setFixedSize(18, 18)
-        # Apply strict CSS reset to bypass QFrame inheritance border-radius clipping (Solves cut off issue!)
         host_icon.setStyleSheet("border: none; background: transparent; border-radius: 0px; padding: 0px;")
         host_icon.setPixmap(get_svg_pixmap(LUCIDE_HOST_SVG, 18))
         
@@ -741,11 +1083,18 @@ class SettingsModal(QDialog):
             }
         """)
         self.btn_toggle_server.clicked.connect(self.toggle_local_server)
-        srv_ctrl_row.addWidget(self.btn_toggle_server)
+        srv_ctrl_row.addWidget(self.btn_toggle_server, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_server_icon = QLabel()
+        self.lbl_server_icon.setFixedSize(16, 16)
+        self.lbl_server_icon.setScaledContents(True)
+        self.lbl_server_icon.setStyleSheet("border: none; background: transparent; padding: 0px; margin: 0px;")
+        self.lbl_server_icon.setPixmap(get_svg_pixmap(LUCIDE_STATUS_OFF_SVG, 16))
+        srv_ctrl_row.addWidget(self.lbl_server_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         
         self.lbl_server_status = QLabel("서버 상태: 꺼짐")
-        self.lbl_server_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent;")
-        srv_ctrl_row.addWidget(self.lbl_server_status)
+        self.lbl_server_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent; font-size: 13px;")
+        srv_ctrl_row.addWidget(self.lbl_server_status, 0, Qt.AlignmentFlag.AlignVCenter)
+        srv_ctrl_row.addStretch()
         host_lay.addLayout(srv_ctrl_row)
         
         lay.addWidget(host_box)
@@ -769,7 +1118,6 @@ class SettingsModal(QDialog):
         
         guest_icon = QLabel()
         guest_icon.setFixedSize(18, 18)
-        # Apply strict CSS reset to bypass QFrame inheritance border-radius clipping (Solves cut off issue!)
         guest_icon.setStyleSheet("border: none; background: transparent; border-radius: 0px; padding: 0px;")
         guest_icon.setPixmap(get_svg_pixmap(LUCIDE_JOIN_SVG, 18))
         
@@ -797,18 +1145,6 @@ class SettingsModal(QDialog):
         ip_row.addWidget(self.txt_host_url)
         guest_lay.addLayout(ip_row)
         
-        # Show LAN IP hint & warning for public profiles
-        lan_ip = network_manager.get_local_lan_ip()
-        net_cat = network_manager.get_network_category()
-        hint_text = f"※ 내 LAN IP: {lan_ip} (파티원 접속 시 입력할 주소)"
-        if net_cat == "Public":
-            hint_text += "\n⚠️ 현재 네트워크 프로필이 공용(Public)입니다! 방화벽에 의해 다른 PC의 접속이 차단될 수 있습니다."
-            
-        self.lbl_network_hint = QLabel(hint_text)
-        self.lbl_network_hint.setWordWrap(True)
-        self.lbl_network_hint.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.4); line-height: 1.3; border: none; background: transparent;")
-        guest_lay.addWidget(self.lbl_network_hint)
-        
         conn_row = QHBoxLayout()
         conn_row.setSpacing(10)
         self.btn_toggle_client = QPushButton("방 접속하기")
@@ -824,17 +1160,24 @@ class SettingsModal(QDialog):
             }
         """)
         self.btn_toggle_client.clicked.connect(self.toggle_client_connection)
-        conn_row.addWidget(self.btn_toggle_client)
+        conn_row.addWidget(self.btn_toggle_client, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_client_icon = QLabel()
+        self.lbl_client_icon.setFixedSize(16, 16)
+        self.lbl_client_icon.setScaledContents(True)
+        self.lbl_client_icon.setStyleSheet("border: none; background: transparent; padding: 0px; margin: 0px;")
+        self.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_UNLINKED_SVG, 16))
+        conn_row.addWidget(self.lbl_client_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         
         self.lbl_client_status = QLabel("접속 상태: 대기")
-        self.lbl_client_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent;")
-        conn_row.addWidget(self.lbl_client_status)
+        self.lbl_client_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent; font-size: 13px;")
+        conn_row.addWidget(self.lbl_client_status, 0, Qt.AlignmentFlag.AlignVCenter)
+        conn_row.addStretch()
         guest_lay.addLayout(conn_row)
         
         lay.addWidget(guest_box)
         
         # Party Panel Show Toggle
-        self.btn_show_panel = QPushButton("파티 현황 모니터판 켜기")
+        self.btn_show_panel = QPushButton("파티 현황 켜기")
         self.btn_show_panel.setStyleSheet("""
             QPushButton {
                 background-color: rgba(255, 255, 255, 0.08);
@@ -850,14 +1193,72 @@ class SettingsModal(QDialog):
         self.btn_show_panel.clicked.connect(self.toggle_party_panel_visible)
         lay.addWidget(self.btn_show_panel)
         
+        # Party Panel Click-Through Toggle
+        self.btn_panel_click_through = QPushButton("파티 현황 마우스 투과: 끔")
+        self.btn_panel_click_through.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 149, 0, 0.08);
+                border: 1px solid rgba(255, 149, 0, 0.20);
+                border-radius: 10px;
+                padding: 8px;
+                font-weight: 600;
+                color: #ff9500;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 149, 0, 0.18);
+            }
+        """)
+        self.btn_panel_click_through.clicked.connect(self.toggle_panel_click_through)
+        lay.addWidget(self.btn_panel_click_through)
+        
+        # Party Panel Opacity Slider Group
+        opacity_lay = QHBoxLayout()
+        opacity_lay.setSpacing(10)
+        opacity_lay.setContentsMargins(0, 5, 0, 5)
+        
+        lbl_opacity_title = QLabel("파티 현황 투명도:")
+        lbl_opacity_title.setStyleSheet("font-size: 12px; font-weight: bold; border: none; background: transparent; color: #ff9500;")
+        
+        self.party_opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.party_opacity_slider.setRange(10, 100)
+        # Safely read value, fallback to 90
+        initial_op = 90
+        if self.parent_window and self.parent_window.party_panel:
+            initial_op = getattr(self.parent_window.party_panel, 'panel_opacity', 90)
+        self.party_opacity_slider.setValue(initial_op)
+        self.party_opacity_slider.valueChanged.connect(self.on_party_opacity_changed)
+        
+        self.lbl_party_opacity_val = QLabel(f"{self.party_opacity_slider.value()}%")
+        self.lbl_party_opacity_val.setStyleSheet("font-size: 12px; font-weight: bold; border: none; background: transparent;")
+        self.lbl_party_opacity_val.setFixedWidth(35)
+        self.lbl_party_opacity_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        
+        opacity_lay.addWidget(lbl_opacity_title)
+        opacity_lay.addWidget(self.party_opacity_slider)
+        opacity_lay.addWidget(self.lbl_party_opacity_val)
+        lay.addLayout(opacity_lay)
+        
         self.update_network_tab_texts()
         lay.addStretch()
 
     # Skill Logic
     def refresh_skill_list(self):
+        selected_name = None
+        curr = self.skill_list.currentItem()
+        if curr:
+            selected_name = curr.text()
+            
         self.skill_list.clear()
+        
+        target_item = None
         for name in self.parent_window.detector.slots.keys():
-            self.skill_list.addItem(name)
+            item = QListWidgetItem(name)
+            self.skill_list.addItem(item)
+            if name == selected_name:
+                target_item = item
+                
+        if target_item:
+            self.skill_list.setCurrentItem(target_item)
 
     def add_new_skill_slot(self):
         name, ok = get_dark_input_text(self, "스킬 추가", "감지할 스킬 이름을 입력하세요:")
@@ -885,14 +1286,28 @@ class SettingsModal(QDialog):
             show_dark_message_box(self, "선택 필요", "영역을 지정할 스킬을 목록에서 먼저 선택하세요.", QMessageBox.Icon.Warning)
             return
             
-        self.hide()  # Hide modal momentarily
+        self.hide()  # Hide modal momentarily to allow screen capture below it
         self.parent_window.start_cooldown_area_capture(curr.text(), self)
 
     def on_skill_selection_changed(self, row):
         curr = self.skill_list.currentItem()
         if not curr:
             self.lbl_selected_status.setText("선택된 스킬 없음")
+            self.lbl_skill_img.setText("스냅샷 없음\n(영역 지정 필요)")
+            self.lbl_skill_img.setPixmap(QPixmap())
+            self.spin_cooldown.setEnabled(False)
+            self.spin_cooldown.blockSignals(True)
+            self.spin_cooldown.setValue(0)
+            self.spin_cooldown.blockSignals(False)
             return
+            
+        name = curr.text()
+        slot = self.parent_window.detector.slots.get(name)
+        if slot:
+            self.spin_cooldown.setEnabled(True)
+            self.spin_cooldown.blockSignals(True)
+            self.spin_cooldown.setValue(slot.cooldown_duration)
+            self.spin_cooldown.blockSignals(False)
             
         name = curr.text()
         slot = self.parent_window.detector.slots.get(name)
@@ -900,36 +1315,132 @@ class SettingsModal(QDialog):
             status = "좌표: 지정 완료" if slot.rect else "좌표: 미지정"
             has_template = " Ready 스냅샷: 있음" if slot.template is not None else " Ready 스냅샷: 없음 (영역 지정 필요)"
             self.lbl_selected_status.setText(f"[{name}] {status} | {has_template}")
+            
+            # Show visual snapshot preview if available (Prefer color snapshot)
+            if slot.template_color is not None:
+                try:
+                    # Convert 3D RGB numpy array (uint8) to QImage (w * 3 bytes per line)
+                    h, w = slot.template_color.shape[:2]
+                    qimg = QImage(slot.template_color.data.tobytes(), w, h, w * 3, QImage.Format.Format_RGB888)
+                    pixmap = QPixmap.fromImage(qimg)
+                    
+                    # Smoothly scale to fit inside our 96x96 QLabel keeping aspect ratio
+                    scaled_pixmap = pixmap.scaled(
+                        self.lbl_skill_img.size(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+                    self.lbl_skill_img.setPixmap(scaled_pixmap)
+                except Exception:
+                    self.lbl_skill_img.setText("이미지 로드 실패")
+                    self.lbl_skill_img.setPixmap(QPixmap())
+            elif slot.template is not None:
+                try:
+                    # Fallback: Convert 2D grayscale numpy array (uint8) to QImage
+                    h, w = slot.template.shape[:2]
+                    qimg = QImage(slot.template.data.tobytes(), w, h, w, QImage.Format.Format_Grayscale8)
+                    pixmap = QPixmap.fromImage(qimg)
+                    
+                    scaled_pixmap = pixmap.scaled(
+                        self.lbl_skill_img.size(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+                    self.lbl_skill_img.setPixmap(scaled_pixmap)
+                except Exception:
+                    self.lbl_skill_img.setText("이미지 로드 실패")
+                    self.lbl_skill_img.setPixmap(QPixmap())
+            else:
+                self.lbl_skill_img.setText("스냅샷 없음\n(영역 지정 필요)")
+                self.lbl_skill_img.setPixmap(QPixmap())
 
-    # Network Logic
+    def on_cooldown_value_changed(self, val):
+        curr = self.skill_list.currentItem()
+        if curr:
+            name = curr.text()
+            slot = self.parent_window.detector.slots.get(name)
+            if slot:
+                slot.cooldown_duration = val
+                self.parent_window.save_settings()
+
+    def on_party_opacity_changed(self, value):
+        self.lbl_party_opacity_val.setText(f"{value}%")
+        if self.parent_window and self.parent_window.party_panel:
+            self.parent_window.party_panel.setWindowOpacity(value / 100.0)
+            self.parent_window.party_panel.panel_opacity = value
+            self.parent_window.save_settings()
+
+
     def update_network_tab_texts(self):
         if self.parent_window.server_running:
             self.btn_toggle_server.setText("서버 중지")
-            self.lbl_server_status.setText("서버 가동 중 (포트 19090)")
-            self.lbl_server_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent;")
+            actual_port = self.parent_window.server.port if self.parent_window.server else "?"
+            self.lbl_server_status.setText(f"서버 가동 중 (포트 {actual_port})")
+            self.lbl_server_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent; font-size: 13px;")
+            self.lbl_server_icon.setPixmap(get_svg_pixmap(LUCIDE_STATUS_ON_SVG, 16))
         else:
             self.btn_toggle_server.setText("대기실 서버 가동")
             self.lbl_server_status.setText("서버 상태: 꺼짐")
-            self.lbl_server_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent;")
+            self.lbl_server_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent; font-size: 13px;")
+            self.lbl_server_icon.setPixmap(get_svg_pixmap(LUCIDE_STATUS_OFF_SVG, 16))
             
         if self.parent_window.client_running:
             self.btn_toggle_client.setText("접속 끊기")
-            self.lbl_client_status.setText("동기화 연결 중")
-            self.lbl_client_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent;")
+            if "정상 연결" not in self.lbl_client_status.text():
+                self.lbl_client_status.setText("동기화 연결 중")
+            self.lbl_client_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent; font-size: 13px;")
+            self.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_LINKED_SVG, 16))
         else:
             self.btn_toggle_client.setText("방 접속하기")
             self.lbl_client_status.setText("접속 상태: 대기")
-            self.lbl_client_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent;")
+            self.lbl_client_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent; font-size: 13px;")
+            self.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_UNLINKED_SVG, 16))
             
         if self.parent_window.party_panel.isVisible():
-            self.btn_show_panel.setText("파티 현황 모니터판 끄기")
+            self.btn_show_panel.setText("파티 현황 끄기")
         else:
-            self.btn_show_panel.setText("파티 현황 모니터판 켜기")
+            self.btn_show_panel.setText("파티 현황 켜기")
+        
+        if self.parent_window.party_panel.panel_click_through:
+            self.btn_panel_click_through.setText("파티 현황 마우스 투과: 켬")
+            self.btn_panel_click_through.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(255, 149, 0, 0.20);
+                    border: 1px solid rgba(255, 149, 0, 0.40);
+                    border-radius: 10px;
+                    padding: 8px;
+                    font-weight: 600;
+                    color: #ff9500;
+                }
+                QPushButton:hover {
+                    background-color: rgba(255, 149, 0, 0.30);
+                }
+            """)
+        else:
+            self.btn_panel_click_through.setText("파티 현황 마우스 투과: 끔")
+            self.btn_panel_click_through.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(255, 149, 0, 0.08);
+                    border: 1px solid rgba(255, 149, 0, 0.20);
+                    border-radius: 10px;
+                    padding: 8px;
+                    font-weight: 600;
+                    color: #ff9500;
+                }
+                QPushButton:hover {
+                    background-color: rgba(255, 149, 0, 0.18);
+                }
+            """)
 
     def toggle_local_server(self):
         if self.parent_window.server_running:
             self.parent_window.stop_party_server()
         else:
+            # Read character name from text field BEFORE starting server
+            # so auto-join uses the correct player name
+            char_name = self.txt_char_name.text().strip()
+            if char_name:
+                self.parent_window.player_name = char_name
             self.parent_window.start_party_server()
         self.update_network_tab_texts()
 
@@ -940,9 +1451,14 @@ class SettingsModal(QDialog):
         if not char_name:
             show_dark_message_box(self, "이름 필요", "캐릭터명을 정확하게 기입하세요.", QMessageBox.Icon.Warning)
             return
+        
+        if not url:
+            show_dark_message_box(self, "주소 필요", "방장의 IP 주소를 입력하세요.", QMessageBox.Icon.Warning)
+            return
             
         self.parent_window.player_name = char_name
         self.parent_window.server_url = url
+        self.parent_window.save_settings()
         
         if self.parent_window.client_running:
             self.parent_window.stop_party_client()
@@ -956,6 +1472,12 @@ class SettingsModal(QDialog):
         else:
             self.parent_window.party_panel.show()
             self.parent_window.party_panel.activateWindow()
+        self.update_network_tab_texts()
+
+    def toggle_panel_click_through(self):
+        panel = self.parent_window.party_panel
+        panel.set_click_through(not panel.panel_click_through)
+        self.parent_window.save_settings()
         self.update_network_tab_texts()
 
     def save_and_close(self):
@@ -1065,6 +1587,28 @@ class SettingsModal(QDialog):
             
     def mouseReleaseEvent(self, event):
         self.old_pos = None
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        geom = self.geometry()
+        target_y = geom.y()
+        start_y = target_y + 30
+        
+        self.move(geom.x(), start_y)
+        self.anim_pos = QPropertyAnimation(self, b"pos")
+        self.anim_pos.setDuration(220)
+        self.anim_pos.setStartValue(QPoint(geom.x(), start_y))
+        self.anim_pos.setEndValue(QPoint(geom.x(), target_y))
+        self.anim_pos.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.anim_pos.start()
+        
+        self.setWindowOpacity(0.0)
+        self.anim_opacity = QPropertyAnimation(self, b"windowOpacity")
+        self.anim_opacity.setDuration(220)
+        self.anim_opacity.setStartValue(0.0)
+        self.anim_opacity.setEndValue(1.0)
+        self.anim_opacity.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.anim_opacity.start()
 
 class HelpModal(QDialog):
     def __init__(self, parent=None):
@@ -1265,13 +1809,14 @@ class MagnifierWindow(QMainWindow):
         
         # Player states and settings
         self.player_name = "플레이어"
-        self.server_url = "http://127.0.0.1:9090"
+        self.server_url = "http://127.0.0.1:19090"
         self.hide_ui_on_transparent = False  # Feature Toggle
         
         # Initialize detector
         self.detector = cooldown_detector.CooldownDetector()
+        self.detector.device_ratio = QApplication.primaryScreen().devicePixelRatio()
         self.detector.state_changed.connect(self.on_skill_state_changed)
-        self.detector.start_detection(250)  # Scan every 250ms (runs inside background QThread)
+        self.detector.start_detection(100)  # Scan every 100ms (runs inside background QThread)
         
         # Network objects
         self.server = None
@@ -1280,7 +1825,7 @@ class MagnifierWindow(QMainWindow):
         self.client_running = False
         
         # Floating party statuses panel
-        self.party_panel = PartyPanel()
+        self.party_panel = PartyPanel(self)
         
         self.load_settings()
         self.load_icon()
@@ -1408,6 +1953,25 @@ class MagnifierWindow(QMainWindow):
                         self.server_url = self.server_url.replace(":9090", ":19090")
                     self.hide_ui_on_transparent = data.get('hide_ui_on_transparent', False)
                     
+                    # Restore party panel position and size
+                    party_pos = data.get('party_panel_pos', None)
+                    if party_pos and len(party_pos) == 2 and self.party_panel:
+                        self.party_panel.move(party_pos[0], party_pos[1])
+                    
+                    party_size = data.get('party_panel_size', None)
+                    if party_size and len(party_size) == 2 and self.party_panel:
+                        self.party_panel.resize(party_size[0], party_size[1])
+                        
+                    party_opacity = data.get('party_panel_opacity', 90)
+                    if self.party_panel:
+                        self.party_panel.panel_opacity = party_opacity
+                        self.party_panel.setWindowOpacity(party_opacity / 100.0)
+                    
+                    # Restore party panel click-through state
+                    panel_ct = data.get('party_panel_click_through', False)
+                    if panel_ct and self.party_panel:
+                        self.party_panel.set_click_through(True)
+                    
                     # Restore skill slots and templates (grayscale CV2 matrices) from config
                     skills = data.get('skills', [])
                     templates_dir = os.path.join(os.path.dirname(config_path), 'templates')
@@ -1418,6 +1982,7 @@ class MagnifierWindow(QMainWindow):
                         name = s_info.get("name")
                         rect_val = s_info.get("rect")
                         threshold = s_info.get("threshold", 0.85)
+                        cooldown_duration = s_info.get("cooldown_duration", 0)
                         
                         rect = QRect(rect_val[0], rect_val[1], rect_val[2], rect_val[3]) if rect_val else None
                         
@@ -1428,11 +1993,13 @@ class MagnifierWindow(QMainWindow):
                             img_path = os.path.join(templates_dir, safe_filename)
                             if os.path.exists(img_path):
                                 img_array = np.fromfile(img_path, dtype=np.uint8)
-                                template_img = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+                                bgr_img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                                if bgr_img is not None:
+                                    template_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
                         except Exception:
                             pass
                             
-                        self.detector.add_slot(name, rect, threshold, template_img=template_img)
+                        self.detector.add_slot(name, rect, threshold, template_img=template_img, cooldown_duration=cooldown_duration)
                     return
             except Exception:
                 pass
@@ -1451,11 +2018,23 @@ class MagnifierWindow(QMainWindow):
                 skills_data.append({
                     "name": name,
                     "rect": rect_val,
-                    "threshold": slot.threshold
+                    "threshold": slot.threshold,
+                    "cooldown_duration": slot.cooldown_duration
                 })
                 
                 # Write CV2 templates to file with non-ascii Windows compatibility using numpy tofile
-                if slot.template is not None:
+                # Save as color RGB (imencoded back as BGR) if template_color is present
+                if slot.template_color is not None:
+                    try:
+                        safe_filename = base64.urlsafe_b64encode(name.encode('utf-8')).decode('utf-8') + ".png"
+                        img_path = os.path.join(templates_dir, safe_filename)
+                        bgr_img = cv2.cvtColor(slot.template_color, cv2.COLOR_RGB2BGR)
+                        is_success, im_buf_arr = cv2.imencode(".png", bgr_img)
+                        if is_success:
+                            im_buf_arr.tofile(img_path)
+                    except Exception:
+                        pass
+                elif slot.template is not None:
                     try:
                         safe_filename = base64.urlsafe_b64encode(name.encode('utf-8')).decode('utf-8') + ".png"
                         img_path = os.path.join(templates_dir, safe_filename)
@@ -1464,6 +2043,15 @@ class MagnifierWindow(QMainWindow):
                             im_buf_arr.tofile(img_path)
                     except Exception:
                         pass
+
+            party_pos = None
+            party_size = None
+            party_opacity = 90
+            if self.party_panel:
+                pos = self.party_panel.pos()
+                party_pos = [pos.x(), pos.y()]
+                party_size = [self.party_panel.width(), self.party_panel.height()]
+                party_opacity = getattr(self.party_panel, 'panel_opacity', 90)
 
             data = {
                 'zoom_factor': self.zoom_factor,
@@ -1474,7 +2062,11 @@ class MagnifierWindow(QMainWindow):
                 'player_name': self.player_name,
                 'server_url': self.server_url,
                 'hide_ui_on_transparent': self.hide_ui_on_transparent,
-                'skills': skills_data
+                'skills': skills_data,
+                'party_panel_pos': party_pos,
+                'party_panel_size': party_size,
+                'party_panel_opacity': party_opacity,
+                'party_panel_click_through': self.party_panel.panel_click_through if self.party_panel else False
             }
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
@@ -1767,13 +2359,25 @@ class MagnifierWindow(QMainWindow):
         self.config_dialog_ref = config_dialog
         
         self.is_settings_open = True
+        
+        # Hide the main magnifier window to prevent it from blocking capture overlay Z-order or mouse events
+        self.hide()
+        
+        # Create as independent top-level window so parent hide() doesn't propagate to hide the overlay
         self.overlay = CaptureOverlay()
         self.overlay.capture_completed.connect(self.on_cooldown_area_captured)
-        self.overlay.finished.connect(self.restore_settings_open_state)
-        self.overlay.show()
+        self.overlay.exec()  # Modal exec blocks execution until closed, capturing focus reliably
+        self.restore_settings_open_state()
 
     def restore_settings_open_state(self):
+        # Restore the main magnifier window first
+        self.show()
+        
         self.is_settings_open = hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible()
+        # Always restore and show config dialog when capture finishes (success or cancel)
+        if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref:
+            self.config_dialog_ref.show()
+            self.config_dialog_ref.refresh_skill_list()
 
     def on_cooldown_area_captured(self, x, y, w, h, captured_gray):
         try:
@@ -1787,27 +2391,22 @@ class MagnifierWindow(QMainWindow):
             import traceback
             with open("capture_error.log", "a", encoding="utf-8") as f:
                 f.write(f"Capture Error: {str(e)}\n{traceback.format_exc()}\n")
-            
-        # Re-show the settings modal
-        if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref:
-            self.config_dialog_ref.show()
-            self.config_dialog_ref.refresh_skill_list()
 
     def on_skill_state_changed(self, name, is_ready, similarity):
         if is_ready:
-            def play_beep():
-                winsound.Beep(1000, 250)
-            threading.Thread(target=play_beep, daemon=True).start()
+            pass  # 비프음 제거됨
             
         # Send update to party server if active
         if self.client_running and self.client:
-            self.client.send_update(name, is_ready)
+            slot = self.detector.slots.get(name)
+            cooldown_duration = slot.cooldown_duration if slot else 0
+            self.client.send_update(name, is_ready, cooldown_duration)
 
     def broadcast_skill_states(self):
         # Periodically send all registered skill states to keep party server alive and sync initial states
         if self.client_running and self.client:
             for name, slot in self.detector.slots.items():
-                self.client.send_update(name, slot.is_ready)
+                self.client.send_update(name, slot.is_ready, slot.cooldown_duration)
 
     # Server hosting control (uses show_dark_message_box for gorgeous contrast popup)
     def start_party_server(self):
@@ -1823,6 +2422,10 @@ class MagnifierWindow(QMainWindow):
             # Dynamically update host url text field in open settings modal
             if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible():
                 self.config_dialog_ref.txt_host_url.setText(self.server_url)
+            
+            # Auto-join: host also connects as client so their own skill states are broadcast
+            if not self.client_running:
+                self.start_party_client()
                 
         except Exception as e:
             err_msg = str(e)
@@ -1840,6 +2443,9 @@ class MagnifierWindow(QMainWindow):
             )
 
     def stop_party_server(self):
+        # Stop client first if it was auto-connected
+        if self.client_running:
+            self.stop_party_client()
         if self.server:
             try:
                 self.server.stop()
@@ -1857,18 +2463,41 @@ class MagnifierWindow(QMainWindow):
             )
             self.client.status_updated.connect(self.party_panel.update_states)
             self.client.connection_failed.connect(self.on_client_connection_failed)
+            self.client.connection_ok.connect(self.on_client_connection_ok)
             self.client.start()
             self.client_running = True
         except Exception as e:
             show_dark_message_box(self, "접속 오류", f"대기실 접속 시도 중 오류가 발생했습니다:\n{str(e)}", QMessageBox.Icon.Critical)
 
+    def on_client_connection_ok(self):
+        if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible():
+            self.config_dialog_ref.lbl_client_status.setText("동기화 정상 연결됨")
+            self.config_dialog_ref.lbl_client_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent;")
+
     def on_client_connection_failed(self, error_msg):
         # Update settings status label dynamically on connection issues
         if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible():
-            # Shorten the message if it's too long
-            short_msg = error_msg.split(":")[-1].strip() if ":" in error_msg else error_msg
-            self.config_dialog_ref.lbl_client_status.setText(f"실패: {short_msg[:20]}")
-            self.config_dialog_ref.lbl_client_status.setStyleSheet("color: #ff453a; font-weight: 600; border: none; background: transparent;")
+            # 영어 에러 메시지를 한글로 변환
+            msg_lower = error_msg.lower()
+            if 'timed out' in msg_lower or 'timeout' in msg_lower:
+                korean_msg = "연결 시간 초과"
+            elif 'refused' in msg_lower:
+                korean_msg = "서버가 연결을 거부함"
+            elif 'no route' in msg_lower or 'unreachable' in msg_lower:
+                korean_msg = "서버에 도달할 수 없음"
+            elif 'name or service not known' in msg_lower or 'getaddrinfo' in msg_lower:
+                korean_msg = "잘못된 서버 주소"
+            elif 'connection reset' in msg_lower:
+                korean_msg = "연결이 끊어짐"
+            elif 'eof' in msg_lower or 'empty' in msg_lower:
+                korean_msg = "서버 응답 없음"
+            else:
+                short_msg = error_msg.split(":")[-1].strip() if ":" in error_msg else error_msg
+                korean_msg = short_msg[:25]
+            
+            self.config_dialog_ref.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_ERROR_SVG, 16))
+            self.config_dialog_ref.lbl_client_status.setText(f"실패: {korean_msg}")
+            self.config_dialog_ref.lbl_client_status.setStyleSheet("color: #ff453a; font-weight: 600; border: none; background: transparent; font-size: 13px;")
 
     def stop_party_client(self):
         if self.client:
@@ -1935,11 +2564,20 @@ class MagnifierWindow(QMainWindow):
         self.save_settings()  # Auto-save click-through setting
 
     def toggle_hide_mode(self):
+        # 파티 스킬 모니터가 보이면 최소화 전에 기억해두고 메인만 최소화
+        party_was_visible = self.party_panel.isVisible() if self.party_panel else False
         if self.isMinimized():
             self.showNormal()
             self.activateWindow()
+            # 메인 복원 시 파티 패널이 원래 보이던 상태였으면 다시 표시
+            if party_was_visible and self.party_panel and not self.party_panel.isVisible():
+                self.party_panel.show()
         else:
             self.showMinimized()
+            # 메인 최소화 후에도 파티 패널은 계속 표시
+            if party_was_visible and self.party_panel:
+                self.party_panel.show()
+                self.party_panel.raise_()
 
     def on_zoom_slider_changed(self, value):
         self.zoom_factor = value / 10.0
@@ -1957,24 +2595,30 @@ class MagnifierWindow(QMainWindow):
             self.is_settings_open = True
             dialog = SettingsModal(self)
             self.config_dialog_ref = dialog
-            dialog.exec()
-            self.is_settings_open = False
-            self.config_dialog_ref = None
+            dialog.finished.connect(self.on_settings_closed)
+            dialog.show()
         except Exception as e:
             self.is_settings_open = False
             err_msg = f"설정 창 실행 중 예외가 발생했습니다:\n{str(e)}\n\n{traceback.format_exc()}"
             show_dark_message_box(self, "설정 오류", err_msg, QMessageBox.Icon.Critical)
 
+    def on_settings_closed(self, result):
+        self.is_settings_open = False
+        self.config_dialog_ref = None
+
     def show_help(self):
         try:
             self.is_settings_open = True
             dialog = HelpModal(self)
-            dialog.exec()
-            self.is_settings_open = False
+            dialog.finished.connect(self.on_help_closed)
+            dialog.show()
         except Exception as e:
             self.is_settings_open = False
             err_msg = f"도움말 창 실행 중 예외가 발생했습니다:\n{str(e)}\n\n{traceback.format_exc()}"
             show_dark_message_box(self, "도움말 오류", err_msg, QMessageBox.Icon.Critical)
+
+    def on_help_closed(self, result):
+        self.is_settings_open = False
 
     def update_magnifier(self):
         try:
@@ -1984,7 +2628,7 @@ class MagnifierWindow(QMainWindow):
             
             # 마우스 미들 버튼이 이번 프레임에 막 눌린 경우 (Edge Trigger)
             if curr_mbutton and not self.last_mbutton_pressed:
-                if not self.is_settings_open and not self.is_setting_hotkey:
+                if not self.is_setting_hotkey:
                     if self.hotkey_follow:
                         lower_hotkey = self.hotkey_follow.lower()
                         if lower_hotkey == "ctrl+middleclick":
@@ -2099,7 +2743,7 @@ class MagnifierWindow(QMainWindow):
 
     def on_key_press(self, key):
         try:
-            if self.is_settings_open or self.is_setting_hotkey:
+            if self.is_setting_hotkey:
                 return
                 
             try:

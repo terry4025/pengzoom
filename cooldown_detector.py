@@ -7,14 +7,16 @@ from PIL import Image
 from PyQt6.QtCore import QThread, pyqtSignal, QRect
 
 class SkillSlot:
-    def __init__(self, name="스킬", rect=None, threshold=0.85):
+    def __init__(self, name="스킬", rect=None, threshold=0.85, cooldown_duration=0):
         self.name = name
         self.rect = rect  # QRect or tuple (x, y, w, h)
         self.threshold = threshold
         self.template_path = None
         self.is_ready = True  # Current state
         self.last_similarity = 1.0
-        self.template = None
+        self.template = None        # Grayscale matrix for cv2 matchTemplate
+        self.template_color = None  # RGB color matrix for UI Preview
+        self.cooldown_duration = cooldown_duration
 
 class CooldownDetector(QThread):
     state_changed = pyqtSignal(str, bool, float)  # (skill_name, is_ready, similarity)
@@ -23,24 +25,35 @@ class CooldownDetector(QThread):
         super().__init__(parent)
         self.slots = {}  # {name: SkillSlot}
         self.is_running = False
-        self.scan_interval = 0.25  # Default 250ms
+        self.scan_interval = 0.10  # Default 100ms
+        self.device_ratio = 1.0    # DPI scale ratio (synced from main window)
         
-    def add_slot(self, name, rect, threshold=0.85, template_img=None):
-        slot = SkillSlot(name, rect, threshold)
+    def add_slot(self, name, rect, threshold=0.85, template_img=None, template_color=None, cooldown_duration=0):
+        slot = SkillSlot(name, rect, threshold, cooldown_duration)
+        
+        # Load grayscale and color template matrices
         if template_img is not None:
-            # Convert PIL Image or numpy array to grayscale for matchTemplate
             if isinstance(template_img, Image.Image):
                 img_np = np.array(template_img.convert('RGB'))
+                slot.template_color = img_np
                 slot.template = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
             elif isinstance(template_img, np.ndarray):
                 if len(template_img.shape) == 3:
-                    slot.template = cv2.cvtColor(template_img, cv2.COLOR_BGR2GRAY)
+                    # RGB color image received
+                    slot.template_color = template_img
+                    slot.template = cv2.cvtColor(template_img, cv2.COLOR_RGB2GRAY)
                 else:
                     slot.template = template_img
+                    slot.template_color = None
             else:
                 slot.template = template_img
+                slot.template_color = None
         else:
             slot.template = None
+            slot.template_color = None
+            
+        if template_color is not None:
+            slot.template_color = template_color
             
         self.slots[name] = slot
         
@@ -48,7 +61,7 @@ class CooldownDetector(QThread):
         if name in self.slots:
             del self.slots[name]
             
-    def start_detection(self, interval_ms=250):
+    def start_detection(self, interval_ms=100):
         self.scan_interval = interval_ms / 1000.0
         if not self.isRunning():
             self.start()
@@ -80,8 +93,15 @@ class CooldownDetector(QThread):
                     x, y, w, h = slot.rect.x(), slot.rect.y(), slot.rect.width(), slot.rect.height()
                 else:
                     x, y, w, h = slot.rect
-                    
-                monitor = {"top": y, "left": x, "width": w, "height": h}
+                
+                # Convert logical screen coordinates to physical coordinates for mss based on DPI ratio
+                ratio = self.device_ratio
+                px = int(x * ratio)
+                py = int(y * ratio)
+                pw = int(w * ratio)
+                ph = int(h * ratio)
+                
+                monitor = {"top": py, "left": px, "width": pw, "height": ph}
                 sct_img = sct.grab(monitor)
                 
                 captured_rgb = np.array(sct_img)[:, :, :3]

@@ -3,7 +3,8 @@ import threading
 import time
 import urllib.request
 import urllib.error
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import socket
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from PyQt6.QtCore import QObject, pyqtSignal
 
 # Global in-memory state store for party member cooldowns
@@ -25,13 +26,15 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
                 player = data.get("player")
                 skill = data.get("skill")
                 is_ready = data.get("is_ready")
+                cooldown_duration = data.get("cooldown_duration", 0)
                 
                 if player and skill is not None:
                     if player not in PARTY_STATES:
                         PARTY_STATES[player] = {}
                     PARTY_STATES[player][skill] = {
                         "is_ready": is_ready,
-                        "timestamp": time.time()
+                        "timestamp": time.time(),
+                        "cooldown_duration": cooldown_duration
                     }
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -66,7 +69,6 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
 
 
 def get_local_lan_ip():
-    import socket
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # Try to connect to public DNS to get local route IP
@@ -97,6 +99,22 @@ def get_network_category():
         return "Error"
 
 
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with SO_REUSEADDR enabled.
+    
+    This prevents 'Address already in use' errors when restarting the server
+    quickly after it was stopped, because TIME_WAIT zombie sockets from the
+    previous session's polling connections would otherwise block the port
+    for up to 2 minutes (Windows default TIME_WAIT timeout).
+    """
+    allow_reuse_address = True
+    
+    def server_bind(self):
+        # Explicitly set SO_REUSEADDR before binding
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        super().server_bind()
+
+
 class CooldownServer(QObject):
     started = pyqtSignal()
     stopped = pyqtSignal()
@@ -112,6 +130,8 @@ class CooldownServer(QObject):
         if self.server_thread and self.server_thread.is_alive():
             return
             
+        PARTY_STATES.clear()
+            
         host = self.host
         port = self.port
         success = False
@@ -120,8 +140,7 @@ class CooldownServer(QObject):
         # Try binding from port to port+100 dynamically to bypass Windows port reservations
         for p in range(port, port + 100):
             try:
-                from http.server import ThreadingHTTPServer
-                self.httpd = ThreadingHTTPServer((host, p), PartyStatusHandler)
+                self.httpd = ReusableThreadingHTTPServer((host, p), PartyStatusHandler)
                 self.port = p
                 success = True
                 break
@@ -173,12 +192,15 @@ class CooldownServer(QObject):
                 self.httpd.server_close()
             except Exception:
                 pass
+            self.httpd = None
+        PARTY_STATES.clear()
         self.stopped.emit()
 
 
 class CooldownClient(QObject):
     status_updated = pyqtSignal(dict)  # Emits PARTY_STATES dictionary
     connection_failed = pyqtSignal(str)
+    connection_ok = pyqtSignal()       # Emitted on successful poll — used to clear error UI
     
     def __init__(self, server_url="http://127.0.0.1:19090", player_name="플레이어", parent=None):
         super().__init__(parent)
@@ -186,6 +208,7 @@ class CooldownClient(QObject):
         self.player_name = player_name
         self.polling_thread = None
         self.is_running = False
+        self.consecutive_failures = 0
         
         # Create a custom urllib opener that explicitly bypasses system proxy settings.
         # This fixes WinError connection timeouts (urlopen error timed out) caused by proxies trying to route 127.0.0.1/localhost.
@@ -194,20 +217,22 @@ class CooldownClient(QObject):
         
     def start(self):
         self.is_running = True
+        self.consecutive_failures = 0
         self.polling_thread = threading.Thread(target=self.poll_loop, daemon=True)
         self.polling_thread.start()
         
     def stop(self):
         self.is_running = False
         
-    def send_update(self, skill_name, is_ready):
+    def send_update(self, skill_name, is_ready, cooldown_duration=0):
         # Fire-and-forget HTTP POST request to server in background thread to avoid GUI freeze
         def _send():
             url = f"{self.server_url}/update"
             data = json.dumps({
                 "player": self.player_name,
                 "skill": skill_name,
-                "is_ready": is_ready
+                "is_ready": is_ready,
+                "cooldown_duration": cooldown_duration
             }).encode("utf-8")
             
             try:
@@ -231,9 +256,12 @@ class CooldownClient(QObject):
                 req = urllib.request.Request(url, method="GET")
                 with self.opener.open(req, timeout=2.0) as res:
                     response_data = json.loads(res.read().decode("utf-8"))
+                    self.consecutive_failures = 0
                     self.status_updated.emit(response_data)
+                    self.connection_ok.emit()
             except Exception as e:
+                self.consecutive_failures += 1
                 self.connection_failed.emit(f"상태 가져오기 실패: {str(e)}")
                 
-            # Poll status every 500ms
-            time.sleep(0.5)
+            # Poll status every 1 second (was 0.5s — reduced to avoid TIME_WAIT socket exhaustion)
+            time.sleep(1.0)
