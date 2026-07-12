@@ -212,6 +212,19 @@ LUCIDE_UNLINKED_SVG = """
 </svg>
 """
 
+LUCIDE_LOADER_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#0a84ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <line x1="12" y1="2" x2="12" y2="6"/>
+  <line x1="12" y1="18" x2="12" y2="22"/>
+  <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/>
+  <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/>
+  <line x1="2" y1="12" x2="6" y2="12"/>
+  <line x1="18" y1="12" x2="22" y2="12"/>
+  <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/>
+  <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
+</svg>
+"""
+
 LUCIDE_ERROR_SVG = """
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ff453a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
   <circle cx="12" cy="12" r="10"/>
@@ -733,6 +746,10 @@ class SettingsModal(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
         self.is_setting_target = None
+        self.spinner_timer = QTimer(self)
+        self.spinner_timer.timeout.connect(self.rotate_spinner_icon)
+        self.spinner_angle = 0
+        self.client_connection_start_time = 0.0
 
         
         self.setStyleSheet("""
@@ -1348,13 +1365,8 @@ class SettingsModal(QDialog):
 
 
     def update_network_tab_texts(self):
-            
         if self.parent_window.client_running:
             self.btn_toggle_client.setText("접속 끊기")
-            if "정상 연결" not in self.lbl_client_status.text():
-                self.lbl_client_status.setText("동기화 연결 중")
-            self.lbl_client_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent; font-size: 13px;")
-            self.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_LINKED_SVG, 16))
         else:
             self.btn_toggle_client.setText("방 접속하기")
             self.lbl_client_status.setText("접속 상태: 대기")
@@ -1397,7 +1409,16 @@ class SettingsModal(QDialog):
                 }
             """)
 
+    def rotate_spinner_icon(self):
+        self.spinner_angle = (self.spinner_angle + 30) % 360
+        pixmap = get_svg_pixmap(LUCIDE_LOADER_SVG, 16)
+        from PyQt6.QtGui import QTransform
+        transform = QTransform().rotate(self.spinner_angle)
+        rotated = pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
+        self.lbl_client_icon.setPixmap(rotated)
+
     def toggle_client_connection(self):
+        import time
         char_name = self.txt_char_name.text().strip()
         url = self.txt_host_url.text().strip()
         room_id = self.txt_room_id.text().strip()
@@ -1420,8 +1441,15 @@ class SettingsModal(QDialog):
         self.parent_window.save_settings()
         
         if self.parent_window.client_running:
+            self.spinner_timer.stop()
             self.parent_window.stop_party_client()
         else:
+            self.client_connection_start_time = time.time()
+            self.spinner_angle = 0
+            self.lbl_client_icon.setVisible(True)
+            self.spinner_timer.start(100)
+            self.lbl_client_status.setText("동기화 연결 중...")
+            self.lbl_client_status.setStyleSheet("color: #0a84ff; font-weight: 600; border: none; background: transparent; font-size: 13px;")
             self.parent_window.start_party_client()
         self.update_network_tab_texts()
 
@@ -2438,12 +2466,25 @@ class MagnifierWindow(QMainWindow):
 
     def on_client_connection_ok(self):
         if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible():
-            self.config_dialog_ref.lbl_client_status.setText("동기화 정상 연결됨")
-            self.config_dialog_ref.lbl_client_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent;")
+            dlg = self.config_dialog_ref
+            dlg.spinner_timer.stop()
+            dlg.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_CHECK_SVG, 16))
+            dlg.lbl_client_icon.setVisible(True)
+            dlg.lbl_client_status.setText("동기화 정상 연결됨")
+            dlg.lbl_client_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent; font-size: 13px;")
 
     def on_client_connection_failed(self, error_msg):
-        # Update settings status label dynamically on connection issues
+        import time
         if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible():
+            dlg = self.config_dialog_ref
+            elapsed = time.time() - dlg.client_connection_start_time
+            if elapsed < 45.0:
+                dlg.lbl_client_status.setText("서버 활성화 중... (최대 1분 소요)")
+                dlg.lbl_client_status.setStyleSheet("color: #ff9500; font-weight: 600; border: none; background: transparent; font-size: 13px;")
+                return
+            
+            dlg.spinner_timer.stop()
+            
             # 영어 에러 메시지를 한글로 변환
             msg_lower = error_msg.lower()
             if 'timed out' in msg_lower or 'timeout' in msg_lower:
@@ -2462,9 +2503,10 @@ class MagnifierWindow(QMainWindow):
                 short_msg = error_msg.split(":")[-1].strip() if ":" in error_msg else error_msg
                 korean_msg = short_msg[:25]
             
-            self.config_dialog_ref.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_ERROR_SVG, 16))
-            self.config_dialog_ref.lbl_client_status.setText(f"실패: {korean_msg}")
-            self.config_dialog_ref.lbl_client_status.setStyleSheet("color: #ff453a; font-weight: 600; border: none; background: transparent; font-size: 13px;")
+            dlg.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_ERROR_SVG, 16))
+            dlg.lbl_client_icon.setVisible(True)
+            dlg.lbl_client_status.setText(f"실패: {korean_msg}")
+            dlg.lbl_client_status.setStyleSheet("color: #ff453a; font-weight: 600; border: none; background: transparent; font-size: 13px;")
 
     def stop_party_client(self):
         if self.client:
