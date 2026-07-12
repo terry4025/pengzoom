@@ -1032,21 +1032,38 @@ class SettingsModal(QDialog):
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(12)
         
+        # 1. Main Configuration Box
+        config_box = QFrame()
+        config_box.setStyleSheet("""
+            QFrame {
+                background-color: rgba(48, 209, 88, 0.04); 
+                border: 1px solid rgba(48, 209, 88, 0.18); 
+                border-radius: 12px; 
+                padding: 14px;
+            }
+        """)
+        config_lay = QVBoxLayout(config_box)
+        config_lay.setContentsMargins(12, 12, 12, 12)
+        config_lay.setSpacing(12)
+        
+        title_lay = QHBoxLayout()
+        title_lay.setSpacing(6)
+        join_icon = QLabel()
+        join_icon.setFixedSize(18, 18)
+        join_icon.setStyleSheet("border: none; background: transparent;")
+        join_icon.setPixmap(get_svg_pixmap(LUCIDE_JOIN_SVG, 18))
+        title_lbl = QLabel("<b>파티 쿨타임 공유 연결</b>")
+        title_lbl.setStyleSheet("color: #30d158; font-size: 14px; font-weight: 600; border: none; background: transparent;")
+        title_lay.addWidget(join_icon)
+        title_lay.addWidget(title_lbl)
+        title_lay.addStretch()
+        config_lay.addLayout(title_lay)
+        
         # Character Name Row
         char_row = QHBoxLayout()
-        char_row.setSpacing(6)
-        
-        lbl_char_icon = QLabel()
-        lbl_char_icon.setFixedSize(14, 14)
-        lbl_char_icon.setScaledContents(True)
-        lbl_char_icon.setStyleSheet("border: none; background: transparent; padding: 0px; margin: 0px;")
-        lbl_char_icon.setPixmap(get_svg_pixmap(LUCIDE_USER_SVG, 14))
-        char_row.addWidget(lbl_char_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        
         char_lbl = QLabel("캐릭터명:")
-        char_lbl.setStyleSheet("font-weight: bold; font-size: 13px; border: none; background: transparent;")
-        char_row.addWidget(char_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        
+        char_lbl.setStyleSheet("font-weight: bold; font-size: 13px; border: none; background: transparent; color: #cccccc;")
+        char_row.addWidget(char_lbl)
         self.txt_char_name = QLineEdit(self.parent_window.player_name)
         self.txt_char_name.setStyleSheet("""
             QLineEdit {
@@ -1058,119 +1075,13 @@ class SettingsModal(QDialog):
                 font-size: 13px;
             }
         """)
-        char_row.addWidget(self.txt_char_name, 0, Qt.AlignmentFlag.AlignVCenter)
-        lay.addLayout(char_row)
-        
-        # Host Server Group
-        host_box = QFrame()
-        host_box.setStyleSheet("""
-            QFrame {
-                background-color: rgba(10, 132, 255, 0.04); 
-                border: 1px solid rgba(10, 132, 255, 0.18); 
-                border-radius: 12px; 
-                padding: 12px;
-            }
-        """)
-        host_lay = QVBoxLayout(host_box)
-        host_lay.setContentsMargins(12, 12, 12, 12)
-        host_lay.setSpacing(10)
-        
-        host_title_lay = QHBoxLayout()
-        host_title_lay.setSpacing(6)
-        
-        host_icon = QLabel()
-        host_icon.setFixedSize(18, 18)
-        host_icon.setStyleSheet("border: none; background: transparent; border-radius: 0px; padding: 0px;")
-        host_icon.setPixmap(get_svg_pixmap(LUCIDE_HOST_SVG, 18))
-        
-        host_lbl = QLabel("<b>중계 방 만들기 (Host)</b>")
-        host_lbl.setStyleSheet("color: #0a84ff; font-size: 14px; font-weight: 600; border: none; background: transparent;")
-        host_title_lay.addWidget(host_icon)
-        host_title_lay.addWidget(host_lbl)
-        host_title_lay.addStretch()
-        host_lay.addLayout(host_title_lay)
-        
-        srv_ctrl_row = QHBoxLayout()
-        srv_ctrl_row.setSpacing(10)
-        self.btn_toggle_server = QPushButton("대기실 서버 가동")
-        self.btn_toggle_server.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(10, 132, 255, 0.15);
-                border: 1px solid rgba(10, 132, 255, 0.3);
-                border-radius: 8px;
-                padding: 6px 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(10, 132, 255, 0.25);
-            }
-        """)
-        self.btn_toggle_server.clicked.connect(self.toggle_local_server)
-        srv_ctrl_row.addWidget(self.btn_toggle_server, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.lbl_server_icon = QLabel()
-        self.lbl_server_icon.setFixedSize(16, 16)
-        self.lbl_server_icon.setScaledContents(True)
-        self.lbl_server_icon.setStyleSheet("border: none; background: transparent; padding: 0px; margin: 0px;")
-        self.lbl_server_icon.setPixmap(get_svg_pixmap(LUCIDE_STATUS_OFF_SVG, 16))
-        srv_ctrl_row.addWidget(self.lbl_server_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        
-        self.lbl_server_status = QLabel("서버 상태: 꺼짐")
-        self.lbl_server_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent; font-size: 13px;")
-        srv_ctrl_row.addWidget(self.lbl_server_status, 0, Qt.AlignmentFlag.AlignVCenter)
-        srv_ctrl_row.addStretch()
-        host_lay.addLayout(srv_ctrl_row)
-        
-        lay.addWidget(host_box)
-        
-        # Guest Connection Group
-        guest_box = QFrame()
-        guest_box.setStyleSheet("""
-            QFrame {
-                background-color: rgba(48, 209, 88, 0.04); 
-                border: 1px solid rgba(48, 209, 88, 0.18); 
-                border-radius: 12px; 
-                padding: 12px;
-            }
-        """)
-        guest_lay = QVBoxLayout(guest_box)
-        guest_lay.setContentsMargins(12, 12, 12, 12)
-        guest_lay.setSpacing(10)
-        
-        guest_title_lay = QHBoxLayout()
-        guest_title_lay.setSpacing(6)
-        
-        guest_icon = QLabel()
-        guest_icon.setFixedSize(18, 18)
-        guest_icon.setStyleSheet("border: none; background: transparent; border-radius: 0px; padding: 0px;")
-        guest_icon.setPixmap(get_svg_pixmap(LUCIDE_JOIN_SVG, 18))
-        
-        guest_lbl = QLabel("<b>대기실 접속하기 (Join)</b>")
-        guest_lbl.setStyleSheet("color: #30d158; font-size: 14px; font-weight: 600; border: none; background: transparent;")
-        guest_title_lay.addWidget(guest_icon)
-        guest_title_lay.addWidget(guest_lbl)
-        guest_title_lay.addStretch()
-        guest_lay.addLayout(guest_title_lay)
-        
-        ip_row = QHBoxLayout()
-        ip_lbl = QLabel("서버 주소 (URL):")
-        ip_lbl.setStyleSheet("border: none; background: transparent; font-size: 12px; color: #cccccc;")
-        ip_row.addWidget(ip_lbl)
-        self.txt_host_url = QLineEdit(self.parent_window.server_url)
-        self.txt_host_url.setStyleSheet("""
-            QLineEdit {
-                background-color: rgba(255, 255, 255, 0.06);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 8px;
-                color: #ffffff;
-                padding: 4px 8px;
-            }
-        """)
-        ip_row.addWidget(self.txt_host_url)
-        guest_lay.addLayout(ip_row)
-        
+        char_row.addWidget(self.txt_char_name)
+        config_lay.addLayout(char_row)
+
         # Room ID Row
         room_row = QHBoxLayout()
         room_lbl = QLabel("방 코드 (Room ID):")
-        room_lbl.setStyleSheet("border: none; background: transparent; font-size: 12px; color: #cccccc;")
+        room_lbl.setStyleSheet("font-weight: bold; font-size: 13px; border: none; background: transparent; color: #cccccc;")
         room_row.addWidget(room_lbl)
         room_val = getattr(self.parent_window, "room_id", "default")
         self.txt_room_id = QLineEdit(room_val)
@@ -1180,12 +1091,34 @@ class SettingsModal(QDialog):
                 border: 1px solid rgba(255, 255, 255, 0.12);
                 border-radius: 8px;
                 color: #ffffff;
-                padding: 4px 8px;
+                padding: 6px 10px;
+                font-size: 13px;
             }
         """)
         room_row.addWidget(self.txt_room_id)
-        guest_lay.addLayout(room_row)
-        
+        config_lay.addLayout(room_row)
+
+        # Server URL Row (Bypassed but kept for flexibility)
+        ip_row = QHBoxLayout()
+        ip_lbl = QLabel("서버 주소 (URL):")
+        ip_lbl.setStyleSheet("border: none; background: transparent; font-size: 12px; color: #888888;")
+        ip_row.addWidget(ip_lbl)
+        self.txt_host_url = QLineEdit(self.parent_window.server_url)
+        self.txt_host_url.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                color: #aaaaaa;
+                padding: 4px 8px;
+                font-size: 12px;
+            }
+        """)
+        self.txt_host_url.setReadOnly(True)
+        ip_row.addWidget(self.txt_host_url)
+        config_lay.addLayout(ip_row)
+
+        # Connection status row
         conn_row = QHBoxLayout()
         conn_row.setSpacing(10)
         self.btn_toggle_client = QPushButton("방 접속하기")
@@ -1202,6 +1135,7 @@ class SettingsModal(QDialog):
         """)
         self.btn_toggle_client.clicked.connect(self.toggle_client_connection)
         conn_row.addWidget(self.btn_toggle_client, 0, Qt.AlignmentFlag.AlignVCenter)
+        
         self.lbl_client_icon = QLabel()
         self.lbl_client_icon.setFixedSize(16, 16)
         self.lbl_client_icon.setScaledContents(True)
@@ -1413,17 +1347,6 @@ class SettingsModal(QDialog):
 
 
     def update_network_tab_texts(self):
-        if self.parent_window.server_running:
-            self.btn_toggle_server.setText("서버 중지")
-            actual_port = self.parent_window.server.port if self.parent_window.server else "?"
-            self.lbl_server_status.setText(f"서버 가동 중 (포트 {actual_port})")
-            self.lbl_server_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent; font-size: 13px;")
-            self.lbl_server_icon.setPixmap(get_svg_pixmap(LUCIDE_STATUS_ON_SVG, 16))
-        else:
-            self.btn_toggle_server.setText("대기실 서버 가동")
-            self.lbl_server_status.setText("서버 상태: 꺼짐")
-            self.lbl_server_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent; font-size: 13px;")
-            self.lbl_server_icon.setPixmap(get_svg_pixmap(LUCIDE_STATUS_OFF_SVG, 16))
             
         if self.parent_window.client_running:
             self.btn_toggle_client.setText("접속 끊기")
@@ -1473,32 +1396,26 @@ class SettingsModal(QDialog):
                 }
             """)
 
-    def toggle_local_server(self):
-        if self.parent_window.server_running:
-            self.parent_window.stop_party_server()
-        else:
-            # Read character name from text field BEFORE starting server
-            # so auto-join uses the correct player name
-            char_name = self.txt_char_name.text().strip()
-            if char_name:
-                self.parent_window.player_name = char_name
-            self.parent_window.start_party_server()
-        self.update_network_tab_texts()
-
     def toggle_client_connection(self):
         char_name = self.txt_char_name.text().strip()
         url = self.txt_host_url.text().strip()
+        room_id = self.txt_room_id.text().strip()
         
         if not char_name:
             show_dark_message_box(self, "이름 필요", "캐릭터명을 정확하게 기입하세요.", QMessageBox.Icon.Warning)
             return
         
         if not url:
-            show_dark_message_box(self, "주소 필요", "방장의 IP 주소를 입력하세요.", QMessageBox.Icon.Warning)
+            show_dark_message_box(self, "주소 필요", "서버 주소를 입력하세요.", QMessageBox.Icon.Warning)
+            return
+            
+        if not room_id:
+            show_dark_message_box(self, "방 코드 필요", "방 코드 (Room ID)를 입력하세요.", QMessageBox.Icon.Warning)
             return
             
         self.parent_window.player_name = char_name
         self.parent_window.server_url = url
+        self.parent_window.room_id = room_id
         self.parent_window.save_settings()
         
         if self.parent_window.client_running:
