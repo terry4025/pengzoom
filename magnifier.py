@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout,
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
                              QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
                              QCheckBox, QSpinBox)
-from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject, QSize, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject, QSize, QPropertyAnimation, QEasingCurve, QEvent
 from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence, QWheelEvent
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
@@ -428,10 +428,12 @@ class PartyPanel(QWidget):
         """)
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(6, 6, 6, 6)
         
         container = QFrame()
         container.setObjectName("Container")
+        container.setMouseTracking(True)
+        container.installEventFilter(self)
         self.container_layout = QVBoxLayout(container)
         self.container_layout.setContentsMargins(14, 14, 14, 14)
         self.container_layout.setSpacing(10)
@@ -623,7 +625,7 @@ class PartyPanel(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
             rect = self.rect()
-            border = 10
+            border = 15
             
             # Check edge areas for resizing
             is_right = pos.x() >= rect.width() - border
@@ -645,7 +647,7 @@ class PartyPanel(QWidget):
             
         pos = event.position().toPoint()
         rect = self.rect()
-        border = 10
+        border = 15
         
         # Cursor styling when hovering over borders (Only when not clicking)
         if event.buttons() == Qt.MouseButton.NoButton:
@@ -684,6 +686,26 @@ class PartyPanel(QWidget):
         self.setCursor(Qt.CursorShape.ArrowCursor)
         if self.parent_window:
             self.parent_window.save_settings()
+
+    def eventFilter(self, obj, event):
+        if not self.panel_click_through and event.type() == QEvent.Type.MouseMove:
+            # Map global position of mouse move inside children to parent's local geometry
+            local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+            rect = self.rect()
+            border = 15
+            
+            is_right = local_pos.x() >= rect.width() - border
+            is_bottom = local_pos.y() >= rect.height() - border
+            
+            if is_right and is_bottom:
+                self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+            elif is_right:
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+            elif is_bottom:
+                self.setCursor(Qt.CursorShape.SizeVerCursor)
+            else:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+        return super().eventFilter(obj, event)
             
     def closeEvent(self, event):
         if self.parent_window:
