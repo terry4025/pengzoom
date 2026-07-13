@@ -81,10 +81,15 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
             room_id = query_params.get("room_id", ["default"])[0]
             room_states = PARTY_STATES.get(room_id, {})
             
+            response_data = {
+                "server_time": time.time(),
+                "states": room_states
+            }
+            
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps(room_states).encode("utf-8"))
+            self.wfile.write(json.dumps(response_data).encode("utf-8"))
         else:
             self.send_response(404)
             self.end_headers()
@@ -281,9 +286,26 @@ class CooldownClient(QObject):
             try:
                 req = urllib.request.Request(url, method="GET")
                 with self.opener.open(req, timeout=2.0) as res:
-                    response_data = json.loads(res.read().decode("utf-8"))
+                    raw_data = json.loads(res.read().decode("utf-8"))
                     self.consecutive_failures = 0
-                    self.status_updated.emit(response_data)
+                    
+                    # Handle both old server format (plain dict) and new structured dict with server_time
+                    if isinstance(raw_data, dict) and "states" in raw_data:
+                        server_time = raw_data.get("server_time", time.time())
+                        states = raw_data.get("states", {})
+                    else:
+                        server_time = time.time()
+                        states = raw_data if isinstance(raw_data, dict) else {}
+                        
+                    # Calculate time offset to synchronize clocks between clients and Render cloud server
+                    time_offset = time.time() - server_time
+                    for player, skills in states.items():
+                        if isinstance(skills, dict):
+                            for skill, info in skills.items():
+                                if isinstance(info, dict) and "timestamp" in info:
+                                    info["timestamp"] = info["timestamp"] + time_offset
+                                    
+                    self.status_updated.emit(states)
                     self.connection_ok.emit()
             except Exception as e:
                 self.consecutive_failures += 1
