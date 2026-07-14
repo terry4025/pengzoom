@@ -4,8 +4,81 @@ import time
 import urllib.request
 import urllib.error
 import socket
+import hashlib
+import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, QUrl, QTimer
+from PyQt6.QtWebSockets import QWebSocket
+from PyQt6.QtNetwork import QAbstractSocket
+
+# Global lock and clients dictionary for local WebSocket handling
+STATE_LOCK = threading.Lock()
+WEBSOCKET_CLIENTS = {}  # { room_id: set(handler) }
+
+def read_ws_frame(rfile):
+    first_byte = rfile.read(1)
+    if not first_byte:
+        return None, None
+    header = first_byte[0]
+    opcode = header & 0x0F
+    
+    second_byte = rfile.read(1)
+    if not second_byte:
+        return None, None
+    mask_and_len = second_byte[0]
+    is_masked = (mask_and_len & 0x80) != 0
+    payload_len = mask_and_len & 0x7F
+    
+    if payload_len == 126:
+        len_bytes = rfile.read(2)
+        if len(len_bytes) < 2:
+            return None, None
+        payload_len = int.from_bytes(len_bytes, byteorder='big')
+    elif payload_len == 127:
+        len_bytes = rfile.read(8)
+        if len(len_bytes) < 8:
+            return None, None
+        payload_len = int.from_bytes(len_bytes, byteorder='big')
+        
+    masking_key = b""
+    if is_masked:
+        masking_key = rfile.read(4)
+        if len(masking_key) < 4:
+            return None, None
+            
+    payload = rfile.read(payload_len)
+    if len(payload) < payload_len:
+        return None, None
+        
+    if is_masked:
+        unmasked = bytearray(payload_len)
+        for i in range(payload_len):
+            unmasked[i] = payload[i] ^ masking_key[i % 4]
+        payload = bytes(unmasked)
+        
+    return opcode, payload
+
+def send_ws_message(wfile, text):
+    try:
+        payload = text.encode('utf-8')
+        length = len(payload)
+        
+        frame = bytearray([0x81]) # FIN + Text
+        if length < 126:
+            frame.append(length)
+        elif length < 65536:
+            frame.append(126)
+            frame.extend(length.to_bytes(2, byteorder='big'))
+        else:
+            frame.append(127)
+            frame.extend(length.to_bytes(8, byteorder='big'))
+            
+        frame.extend(payload)
+        wfile.write(frame)
+        wfile.flush()
+        return True
+    except Exception:
+        return False
 
 # Global in-memory state store for party member cooldowns
 # Format: { room_id: { player_name: { skill_name: { is_ready: bool, timestamp: float, cooldown_duration: int } } } }
@@ -76,7 +149,31 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         from urllib.parse import urlparse, parse_qs
         parsed_url = urlparse(self.path)
-        if parsed_url.path == "/status":
+        if parsed_url.path == "/ws":
+            headers = self.headers
+            if headers.get("Upgrade", "").lower() == "websocket":
+                key = headers.get("Sec-WebSocket-Key")
+                if not key:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                
+                accept_val = base64.b64encode(
+                    hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode('utf-8')).digest()
+                ).decode('utf-8')
+                
+                self.send_response(101, "Switching Protocols")
+                self.send_header("Upgrade", "websocket")
+                self.send_header("Connection", "Upgrade")
+                self.send_header("Sec-WebSocket-Accept", accept_val)
+                self.end_headers()
+                
+                self.handle_ws_connection()
+                return
+            else:
+                self.send_response(400)
+                self.end_headers()
+        elif parsed_url.path == "/status":
             query_params = parse_qs(parsed_url.query)
             room_id = query_params.get("room_id", ["default"])[0]
             room_states = PARTY_STATES.get(room_id, {})
@@ -93,6 +190,95 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def handle_ws_connection(self):
+        room_id = "default"
+        player_name = "unknown"
+        registered = False
+        
+        try:
+            while True:
+                opcode, payload = read_ws_frame(self.rfile)
+                if opcode is None:
+                    break
+                if opcode == 8:  # Close
+                    break
+                elif opcode == 9:  # Ping
+                    pong_frame = bytearray([0x8A, 0])
+                    self.wfile.write(pong_frame)
+                    self.wfile.flush()
+                    continue
+                elif opcode == 1:  # Text
+                    msg_text = payload.decode('utf-8')
+                    try:
+                        msg = json.loads(msg_text)
+                    except Exception:
+                        continue
+                    
+                    action = msg.get("action")
+                    if action == "join":
+                        room_id = msg.get("room_id", "default")
+                        player_name = msg.get("player", "unknown")
+                        
+                        with STATE_LOCK:
+                            if room_id not in WEBSOCKET_CLIENTS:
+                                WEBSOCKET_CLIENTS[room_id] = set()
+                            WEBSOCKET_CLIENTS[room_id].add(self)
+                            registered = True
+                            
+                            # Send initial room state
+                            room_states = PARTY_STATES.get(room_id, {})
+                            join_response = {
+                                "type": "status",
+                                "server_time": time.time(),
+                                "states": room_states
+                            }
+                            send_ws_message(self.wfile, json.dumps(join_response))
+                            
+                    elif action == "update":
+                        room_id = msg.get("room_id", "default")
+                        player = msg.get("player")
+                        skill = msg.get("skill")
+                        is_ready = msg.get("is_ready")
+                        cooldown_duration = msg.get("cooldown_duration", 0)
+                        
+                        if player and skill is not None:
+                            with STATE_LOCK:
+                                if room_id not in PARTY_STATES:
+                                    PARTY_STATES[room_id] = {}
+                                if player not in PARTY_STATES[room_id]:
+                                    PARTY_STATES[room_id][player] = {}
+                                    
+                                PARTY_STATES[room_id][player][skill] = {
+                                    "is_ready": is_ready,
+                                    "timestamp": time.time(),
+                                    "cooldown_duration": cooldown_duration
+                                }
+                                
+                                # Broadcast update to all clients in the same room
+                                broadcast_msg = {
+                                    "type": "update",
+                                    "server_time": time.time(),
+                                    "player": player,
+                                    "skill": skill,
+                                    "state": PARTY_STATES[room_id][player][skill]
+                                }
+                                payload_str = json.dumps(broadcast_msg)
+                                
+                                dead_clients = set()
+                                for client in WEBSOCKET_CLIENTS.get(room_id, []):
+                                    if not send_ws_message(client.wfile, payload_str):
+                                        dead_clients.add(client)
+                                
+                                if dead_clients:
+                                    WEBSOCKET_CLIENTS[room_id].difference_update(dead_clients)
+        except Exception:
+            pass
+        finally:
+            if registered:
+                with STATE_LOCK:
+                    if room_id in WEBSOCKET_CLIENTS:
+                        WEBSOCKET_CLIENTS[room_id].discard(self)
 
 
 def get_local_lan_ip():
@@ -227,69 +413,195 @@ class CooldownServer(QObject):
 class CooldownClient(QObject):
     status_updated = pyqtSignal(dict)  # Emits PARTY_STATES dictionary
     connection_failed = pyqtSignal(str)
-    connection_ok = pyqtSignal()       # Emitted on successful poll — used to clear error UI
+    connection_ok = pyqtSignal()       # Emitted on successful connection — used to clear error UI
     
     def __init__(self, server_url="http://127.0.0.1:19090", player_name="플레이어", room_id="default", parent=None):
         super().__init__(parent)
         self.server_url = server_url.rstrip("/")
         self.player_name = player_name
         self.room_id = room_id
-        self.polling_thread = None
-        self.is_running = False
-        self.consecutive_failures = 0
         
-        # Create a custom urllib opener that explicitly bypasses system proxy settings.
-        # This fixes WinError connection timeouts (urlopen error timed out) caused by proxies trying to route 127.0.0.1/localhost.
+        self.is_running = False
+        self.use_fallback = False
+        self.has_connected = False
+        self.party_states = {}  # Local cache of the full party states dict
+        
+        # Urllib opener for HTTP fallback (bypasses system proxy to prevent 127.0.0.1 timeouts)
         proxy_support = urllib.request.ProxyHandler({})
         self.opener = urllib.request.build_opener(proxy_support)
         
+        # Initialize QWebSocket
+        self.ws = QWebSocket()
+        self.ws.connected.connect(self.on_connected)
+        self.ws.disconnected.connect(self.on_disconnected)
+        self.ws.textMessageReceived.connect(self.on_message_received)
+        self.ws.errorOccurred.connect(self.on_error)
+        
+        # Reconnect timer for WebSocket
+        self.reconnect_timer = QTimer(self)
+        self.reconnect_timer.setInterval(3000)
+        self.reconnect_timer.timeout.connect(self.connect_ws)
+        
+        # HTTP Fallback timer
+        self.fallback_timer = QTimer(self)
+        self.fallback_timer.setInterval(1000)
+        self.fallback_timer.timeout.connect(self.poll_http)
+        
     def start(self):
         self.is_running = True
-        self.consecutive_failures = 0
-        self.polling_thread = threading.Thread(target=self.poll_loop, daemon=True)
-        self.polling_thread.start()
+        self.use_fallback = False
+        self.has_connected = False
+        self.connect_ws()
         
     def stop(self):
         self.is_running = False
+        self.reconnect_timer.stop()
+        self.fallback_timer.stop()
+        self.ws.close()
         
+    def connect_ws(self):
+        if not self.is_running or self.use_fallback:
+            return
+        if self.ws.state() == QAbstractSocket.SocketState.UnconnectedState:
+            ws_url = self.server_url
+            if ws_url.startswith("https://"):
+                ws_url = ws_url.replace("https://", "wss://")
+            elif ws_url.startswith("http://"):
+                ws_url = ws_url.replace("http://", "ws://")
+            else:
+                ws_url = "wss://" + ws_url
+                
+            if not ws_url.endswith("/ws"):
+                ws_url = ws_url + "/ws"
+                
+            self.ws.open(QUrl(ws_url))
+            
+    def on_connected(self):
+        self.has_connected = True
+        self.use_fallback = False
+        self.reconnect_timer.stop()
+        self.connection_ok.emit()
+        
+        # Send join message
+        join_msg = {
+            "action": "join",
+            "room_id": self.room_id,
+            "player": self.player_name
+        }
+        self.ws.sendTextMessage(json.dumps(join_msg))
+        
+    def on_disconnected(self):
+        if self.is_running and not self.use_fallback:
+            self.reconnect_timer.start()
+            
+    def on_error(self, error):
+        error_str = self.ws.errorString()
+        # If we failed to connect initially (e.g. server returned 404 or connection refused), switch to HTTP fallback
+        if not self.has_connected and not self.use_fallback:
+            self.use_fallback = True
+            self.ws.close()
+            self.reconnect_timer.stop()
+            self.fallback_timer.start()
+            self.connection_failed.emit("웹소켓 연결 실패. HTTP 폴링 모드로 전환합니다.")
+        else:
+            self.connection_failed.emit(f"웹소켓 에러: {error_str}")
+            
     def send_update(self, skill_name, is_ready, cooldown_duration=0):
-        # Fire-and-forget HTTP POST request to server in background thread to avoid GUI freeze
-        def _send():
-            url = f"{self.server_url}/update"
-            data = json.dumps({
+        if not self.is_running:
+            return
+            
+        if not self.use_fallback and self.ws.state() == QAbstractSocket.SocketState.ConnectedState:
+            update_msg = {
+                "action": "update",
                 "room_id": self.room_id,
                 "player": self.player_name,
                 "skill": skill_name,
                 "is_ready": is_ready,
                 "cooldown_duration": cooldown_duration
-            }).encode("utf-8")
-            
+            }
             try:
-                req = urllib.request.Request(
-                    url, 
-                    data=data, 
-                    headers={'Content-Type': 'application/json'},
-                    method="POST"
-                )
-                with self.opener.open(req, timeout=2.0) as res:
-                    res.read()
+                self.ws.sendTextMessage(json.dumps(update_msg))
             except Exception as e:
-                self.connection_failed.emit(f"업데이트 전송 실패: {str(e)}")
+                self.connection_failed.emit(f"웹소켓 전송 실패: {str(e)}")
+        else:
+            # Fallback to HTTP POST
+            def _send():
+                url = f"{self.server_url}/update"
+                data = json.dumps({
+                    "room_id": self.room_id,
+                    "player": self.player_name,
+                    "skill": skill_name,
+                    "is_ready": is_ready,
+                    "cooldown_duration": cooldown_duration
+                }).encode("utf-8")
                 
-        threading.Thread(target=_send, daemon=True).start()
-        
-    def poll_loop(self):
-        import urllib.parse
-        while self.is_running:
+                try:
+                    req = urllib.request.Request(
+                        url, 
+                        data=data, 
+                        headers={'Content-Type': 'application/json'},
+                        method="POST"
+                    )
+                    with self.opener.open(req, timeout=2.0) as res:
+                        res.read()
+                except Exception as e:
+                    self.connection_failed.emit(f"HTTP 업데이트 실패: {str(e)}")
+                    
+            threading.Thread(target=_send, daemon=True).start()
+            
+    def on_message_received(self, message):
+        try:
+            data = json.loads(message)
+            msg_type = data.get("type")
+            
+            if msg_type == "status":
+                states = data.get("states", {})
+                server_time = data.get("server_time", time.time())
+                
+                time_offset = time.time() - server_time
+                for player, skills in states.items():
+                    if isinstance(skills, dict):
+                        for skill, info in skills.items():
+                            if isinstance(info, dict) and "timestamp" in info:
+                                info["timestamp"] = info["timestamp"] + time_offset
+                                
+                self.party_states = states
+                self.status_updated.emit(self.party_states)
+                self.connection_ok.emit()
+                
+            elif msg_type == "update":
+                player = data.get("player")
+                skill = data.get("skill")
+                state = data.get("state")
+                server_time = data.get("server_time", time.time())
+                
+                time_offset = time.time() - server_time
+                if isinstance(state, dict) and "timestamp" in state:
+                    state["timestamp"] = state["timestamp"] + time_offset
+                    
+                if player and skill is not None:
+                    if player not in self.party_states:
+                        self.party_states[player] = {}
+                    self.party_states[player][skill] = state
+                    
+                self.status_updated.emit(self.party_states)
+                self.connection_ok.emit()
+        except Exception as e:
+            pass
+            
+    def poll_http(self):
+        if not self.is_running or not self.use_fallback:
+            return
+            
+        def _poll():
+            import urllib.parse
             quoted_room = urllib.parse.quote(self.room_id)
             url = f"{self.server_url}/status?room_id={quoted_room}"
             try:
                 req = urllib.request.Request(url, method="GET")
                 with self.opener.open(req, timeout=2.0) as res:
                     raw_data = json.loads(res.read().decode("utf-8"))
-                    self.consecutive_failures = 0
                     
-                    # Handle both old server format (plain dict) and new structured dict with server_time
                     if isinstance(raw_data, dict) and "states" in raw_data:
                         server_time = raw_data.get("server_time", time.time())
                         states = raw_data.get("states", {})
@@ -297,7 +609,6 @@ class CooldownClient(QObject):
                         server_time = time.time()
                         states = raw_data if isinstance(raw_data, dict) else {}
                         
-                    # Calculate time offset to synchronize clocks between clients and Render cloud server
                     time_offset = time.time() - server_time
                     for player, skills in states.items():
                         if isinstance(skills, dict):
@@ -305,11 +616,10 @@ class CooldownClient(QObject):
                                 if isinstance(info, dict) and "timestamp" in info:
                                     info["timestamp"] = info["timestamp"] + time_offset
                                     
-                    self.status_updated.emit(states)
+                    self.party_states = states
+                    self.status_updated.emit(self.party_states)
                     self.connection_ok.emit()
             except Exception as e:
-                self.consecutive_failures += 1
-                self.connection_failed.emit(f"상태 가져오기 실패: {str(e)}")
+                self.connection_failed.emit(f"상태 가져오기 실패 (HTTP): {str(e)}")
                 
-            # Poll status every 1 second (was 0.5s — reduced to avoid TIME_WAIT socket exhaustion)
-            time.sleep(1.0)
+        threading.Thread(target=_poll, daemon=True).start()

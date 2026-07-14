@@ -17,6 +17,10 @@ class SkillSlot:
         self.template = None        # Grayscale matrix for cv2 matchTemplate
         self.template_color = None  # RGB color matrix for UI Preview
         self.cooldown_duration = cooldown_duration
+        self.trigger_key = None
+        self.cooldown_start_time = 0.0
+        self._ready_consec_frames = 0
+        self._not_ready_consec_frames = 0
 
 class CooldownDetector(QThread):
     state_changed = pyqtSignal(str, bool, float)  # (skill_name, is_ready, similarity)
@@ -25,7 +29,7 @@ class CooldownDetector(QThread):
         super().__init__(parent)
         self.slots = {}  # {name: SkillSlot}
         self.is_running = False
-        self.scan_interval = 0.10  # Default 100ms
+        self.scan_interval = 0.05  # Default 50ms
         self.device_ratio = 1.0    # DPI scale ratio (synced from main window)
         
     def add_slot(self, name, rect, threshold=0.85, template_img=None, template_color=None, cooldown_duration=0):
@@ -60,6 +64,15 @@ class CooldownDetector(QThread):
     def remove_slot(self, name):
         if name in self.slots:
             del self.slots[name]
+            
+    def trigger_cooldown(self, name):
+        slot = self.slots.get(name)
+        if slot:
+            slot.cooldown_start_time = time.time()
+            slot.is_ready = False
+            slot._ready_consec_frames = 0
+            slot._not_ready_consec_frames = 3
+            self.state_changed.emit(name, False, slot.last_similarity)
             
     def start_detection(self, interval_ms=100):
         self.scan_interval = interval_ms / 1000.0
@@ -118,8 +131,35 @@ class CooldownDetector(QThread):
                 
                 slot.last_similarity = max_val
                 
-                new_ready = max_val >= slot.threshold
-                if new_ready != slot.is_ready:
+                # 1. Debounce similarity checks (3 consecutive frames to switch states)
+                raw_ready = max_val >= slot.threshold
+                if raw_ready:
+                    slot._ready_consec_frames += 1
+                    slot._not_ready_consec_frames = 0
+                else:
+                    slot._not_ready_consec_frames += 1
+                    slot._ready_consec_frames = 0
+                    
+                new_ready = slot.is_ready
+                if slot._ready_consec_frames >= 3:
+                    new_ready = True
+                elif slot._not_ready_consec_frames >= 3:
+                    new_ready = False
+                
+                # 2. Check active timer
+                timer_expired = False
+                if slot.cooldown_start_time > 0.0:
+                    elapsed = time.time() - slot.cooldown_start_time
+                    if elapsed < slot.cooldown_duration:
+                        # Timer is active, force ready state to False
+                        new_ready = False
+                    else:
+                        # Timer expired
+                        slot.cooldown_start_time = 0.0
+                        timer_expired = True
+                
+                # 3. Update state if changed or timer just expired
+                if new_ready != slot.is_ready or timer_expired:
                     slot.is_ready = new_ready
                     self.state_changed.emit(name, new_ready, max_val)
                     

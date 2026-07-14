@@ -1,6 +1,8 @@
 import sys
 import os
 import json
+import time
+import math
 import mss
 import numpy as np
 import winsound  # Win32 system sound for cooldown alerts
@@ -1026,6 +1028,29 @@ class SettingsModal(QDialog):
         self.spin_cooldown.valueChanged.connect(self.on_cooldown_value_changed)
         preview_lay.addWidget(self.spin_cooldown)
         
+        # Trigger key UI
+        trigger_lbl = QLabel("트리거 단축키 (예: f)")
+        trigger_lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #aaaaaa; margin-top: 10px;")
+        trigger_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_lay.addWidget(trigger_lbl)
+        
+        self.txt_trigger_key = QLineEdit()
+        self.txt_trigger_key.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 6px;
+                color: #ffffff;
+                padding: 4px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+        """)
+        self.txt_trigger_key.setMaxLength(10)
+        self.txt_trigger_key.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.txt_trigger_key.textChanged.connect(self.on_trigger_key_changed)
+        preview_lay.addWidget(self.txt_trigger_key)
+        
         list_preview_lay.addWidget(self.preview_box, 2) # Ratio 2
         lay.addLayout(list_preview_lay)
         
@@ -1286,6 +1311,11 @@ class SettingsModal(QDialog):
             self.spin_cooldown.blockSignals(True)
             self.spin_cooldown.setValue(0)
             self.spin_cooldown.blockSignals(False)
+            
+            self.txt_trigger_key.setEnabled(False)
+            self.txt_trigger_key.blockSignals(True)
+            self.txt_trigger_key.setText("")
+            self.txt_trigger_key.blockSignals(False)
             return
             
         name = curr.text()
@@ -1296,9 +1326,11 @@ class SettingsModal(QDialog):
             self.spin_cooldown.setValue(slot.cooldown_duration)
             self.spin_cooldown.blockSignals(False)
             
-        name = curr.text()
-        slot = self.parent_window.detector.slots.get(name)
-        if slot:
+            self.txt_trigger_key.setEnabled(True)
+            self.txt_trigger_key.blockSignals(True)
+            self.txt_trigger_key.setText(slot.trigger_key if slot.trigger_key else "")
+            self.txt_trigger_key.blockSignals(False)
+            
             status = "좌표: 지정 완료" if slot.rect else "좌표: 미지정"
             has_template = " Ready 스냅샷: 있음" if slot.template is not None else " Ready 스냅샷: 없음 (영역 지정 필요)"
             self.lbl_selected_status.setText(f"[{name}] {status} | {has_template}")
@@ -1348,6 +1380,15 @@ class SettingsModal(QDialog):
             slot = self.parent_window.detector.slots.get(name)
             if slot:
                 slot.cooldown_duration = val
+                self.parent_window.save_settings()
+
+    def on_trigger_key_changed(self, text):
+        curr = self.skill_list.currentItem()
+        if curr:
+            name = curr.text()
+            slot = self.parent_window.detector.slots.get(name)
+            if slot:
+                slot.trigger_key = text.strip().lower() if text.strip() else None
                 self.parent_window.save_settings()
 
     def on_party_opacity_changed(self, value):
@@ -1404,12 +1445,22 @@ class SettingsModal(QDialog):
             """)
 
     def rotate_spinner_icon(self):
-        self.spinner_angle = (self.spinner_angle + 30) % 360
+        self.spinner_angle = (self.spinner_angle + 8) % 360
+        canvas = QPixmap(24, 24)
+        canvas.fill(Qt.GlobalColor.transparent)
+        
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        
+        painter.translate(12, 12)
+        painter.rotate(self.spinner_angle)
+        
         pixmap = get_svg_pixmap(LUCIDE_LOADER_SVG, 16)
-        from PyQt6.QtGui import QTransform
-        transform = QTransform().rotate(self.spinner_angle)
-        rotated = pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
-        self.lbl_client_icon.setPixmap(rotated)
+        painter.drawPixmap(-8, -8, pixmap)
+        painter.end()
+        
+        self.lbl_client_icon.setPixmap(canvas)
 
     def toggle_client_connection(self):
         import time
@@ -1441,7 +1492,7 @@ class SettingsModal(QDialog):
             self.client_connection_start_time = time.time()
             self.spinner_angle = 0
             self.lbl_client_icon.setVisible(True)
-            self.spinner_timer.start(100)
+            self.spinner_timer.start(30)
             self.lbl_client_status.setText("동기화 연결 중...")
             self.lbl_client_status.setStyleSheet("color: #0a84ff; font-weight: 600; border: none; background: transparent; font-size: 13px;")
             self.parent_window.start_party_client()
@@ -1799,7 +1850,7 @@ class MagnifierWindow(QMainWindow):
         self.detector = cooldown_detector.CooldownDetector()
         self.detector.device_ratio = QApplication.primaryScreen().devicePixelRatio()
         self.detector.state_changed.connect(self.on_skill_state_changed)
-        self.detector.start_detection(100)  # Scan every 100ms (runs inside background QThread)
+        self.detector.start_detection(50)  # Scan every 50ms (runs inside background QThread)
         
         # Network objects
         self.server = None
@@ -1970,6 +2021,7 @@ class MagnifierWindow(QMainWindow):
                         rect_val = s_info.get("rect")
                         threshold = s_info.get("threshold", 0.85)
                         cooldown_duration = s_info.get("cooldown_duration", 0)
+                        trigger_key = s_info.get("trigger_key", None)
                         
                         rect = QRect(rect_val[0], rect_val[1], rect_val[2], rect_val[3]) if rect_val else None
                         
@@ -1987,6 +2039,9 @@ class MagnifierWindow(QMainWindow):
                             pass
                             
                         self.detector.add_slot(name, rect, threshold, template_img=template_img, cooldown_duration=cooldown_duration)
+                        slot = self.detector.slots.get(name)
+                        if slot:
+                            slot.trigger_key = trigger_key
                     return
             except Exception:
                 pass
@@ -2006,7 +2061,8 @@ class MagnifierWindow(QMainWindow):
                     "name": name,
                     "rect": rect_val,
                     "threshold": slot.threshold,
-                    "cooldown_duration": slot.cooldown_duration
+                    "cooldown_duration": slot.cooldown_duration,
+                    "trigger_key": getattr(slot, 'trigger_key', None)
                 })
                 
                 # Write CV2 templates to file with non-ascii Windows compatibility using numpy tofile
@@ -2387,14 +2443,28 @@ class MagnifierWindow(QMainWindow):
         # Send update to party server if active
         if self.client_running and self.client:
             slot = self.detector.slots.get(name)
-            cooldown_duration = slot.cooldown_duration if slot else 0
-            self.client.send_update(name, is_ready, cooldown_duration)
+            if slot:
+                duration = 0
+                if not is_ready:
+                    if slot.cooldown_start_time > 0.0:
+                        elapsed = time.time() - slot.cooldown_start_time
+                        remaining = slot.cooldown_duration - elapsed
+                        if remaining > 0:
+                            duration = int(math.ceil(remaining))
+                self.client.send_update(name, is_ready, duration)
 
     def broadcast_skill_states(self):
         # Periodically send all registered skill states to keep party server alive and sync initial states
         if self.client_running and self.client:
             for name, slot in self.detector.slots.items():
-                self.client.send_update(name, slot.is_ready, slot.cooldown_duration)
+                duration = 0
+                if not slot.is_ready:
+                    if slot.cooldown_start_time > 0.0:
+                        elapsed = time.time() - slot.cooldown_start_time
+                        remaining = slot.cooldown_duration - elapsed
+                        if remaining > 0:
+                            duration = int(math.ceil(remaining))
+                self.client.send_update(name, slot.is_ready, duration)
 
     # Server hosting control (uses show_dark_message_box for gorgeous contrast popup)
     def start_party_server(self):
@@ -2770,6 +2840,11 @@ class MagnifierWindow(QMainWindow):
             if self.is_setting_hotkey:
                 return
 
+            # Trigger manual cooldown for matching skill slots
+            for name, slot in self.detector.slots.items():
+                if getattr(slot, 'trigger_key', None) == current_key_name:
+                    self.detector.trigger_cooldown(name)
+                    
             if self.hotkey_transparent:
                 parts = [p.lower() for p in self.hotkey_transparent.split('+')]
                 if self.check_hotkey_match(parts, current_key_name):
