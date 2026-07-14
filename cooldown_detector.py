@@ -140,23 +140,30 @@ class CooldownDetector(QThread):
                     slot._not_ready_consec_frames += 1
                     slot._ready_consec_frames = 0
                     
-                new_ready = slot.is_ready
+                debounced_ready = slot.is_ready
                 if slot._ready_consec_frames >= 3:
-                    new_ready = True
+                    debounced_ready = True
                 elif slot._not_ready_consec_frames >= 3:
-                    new_ready = False
+                    debounced_ready = False
+                
+                new_ready = debounced_ready
                 
                 # 2. Check active timer
                 timer_expired = False
                 if slot.cooldown_start_time > 0.0:
-                    elapsed = time.time() - slot.cooldown_start_time
-                    if elapsed < slot.cooldown_duration:
-                        # Timer is active, force ready state to False
-                        new_ready = False
-                    else:
-                        # Timer expired
+                    # OpenCV active recognition takes priority: if debounced state is Ready, cancel the timer!
+                    if debounced_ready:
                         slot.cooldown_start_time = 0.0
-                        timer_expired = True
+                        new_ready = True
+                    else:
+                        elapsed = time.time() - slot.cooldown_start_time
+                        if elapsed < slot.cooldown_duration:
+                            # Timer is active, force ready state to False
+                            new_ready = False
+                        else:
+                            # Timer expired
+                            slot.cooldown_start_time = 0.0
+                            timer_expired = True
                 
                 # 3. Update state if changed or timer just expired
                 if new_ready != slot.is_ready or timer_expired:
