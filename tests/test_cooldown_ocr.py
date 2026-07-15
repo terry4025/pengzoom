@@ -4,6 +4,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from unittest import mock
 
 from cooldown_ocr import (
     DEFAULT_PROFILE_ID,
@@ -27,6 +28,14 @@ class ProfileTests(unittest.TestCase):
         self.assertIsNotNone(profile)
         self.assertTrue(profile.trained)
         self.assertEqual(set(profile.labels), set(range(10)))
+
+    def test_embedded_profile_fallback_needs_no_data_file(self):
+        with tempfile.TemporaryDirectory() as temp, mock.patch(
+            "cooldown_ocr._resource_path", return_value=Path(temp) / "missing.json"
+        ):
+            profile = OcrProfileStore(Path(temp) / "profiles").load(DEFAULT_PROFILE_ID)
+        self.assertIsNotNone(profile)
+        self.assertTrue(profile.trained)
 
     @unittest.skipUnless(SAMPLE_PATH.exists(), "local Lost Ark capture set is not present")
     def test_local_seed_benchmark_never_confirms_a_wrong_value(self):

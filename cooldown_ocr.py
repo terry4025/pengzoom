@@ -181,6 +181,14 @@ class OcrProfileStore:
                         return profile
             except Exception:
                 continue
+        if profile_id == DEFAULT_PROFILE_ID:
+            try:
+                from ocr_default_profile import PROFILE_DATA
+                profile = OcrProfile.from_dict(PROFILE_DATA)
+                if profile.version == PROFILE_VERSION and profile.trained:
+                    return profile
+            except Exception:
+                pass
         return None
 
     def list_profiles(self) -> list[str]:
