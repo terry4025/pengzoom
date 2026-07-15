@@ -3,6 +3,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 import socket
 import hashlib
 import base64
@@ -408,6 +409,71 @@ class CooldownServer(QObject):
             self.httpd = None
         PARTY_STATES.clear()
         self.stopped.emit()
+
+
+class CharacterProfileLookup(QObject):
+    profile_loaded = pyqtSignal(int, dict)
+    lookup_failed = pyqtSignal(int, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._request_lock = threading.Lock()
+        self._request_id = 0
+
+    def lookup(self, server_url, character_name):
+        character_name = (character_name or "").strip()
+        server_url = (server_url or "").rstrip("/")
+        with self._request_lock:
+            self._request_id += 1
+            request_id = self._request_id
+
+        worker = threading.Thread(
+            target=self._lookup_worker,
+            args=(request_id, server_url, character_name),
+            daemon=True,
+        )
+        worker.start()
+        return request_id
+
+    def _lookup_worker(self, request_id, server_url, character_name):
+        try:
+            query = urllib.parse.urlencode({"name": character_name})
+            request = urllib.request.Request(
+                f"{server_url}/character?{query}",
+                headers={"Accept": "application/json"},
+                method="GET",
+            )
+            with urllib.request.urlopen(request, timeout=12) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if not isinstance(payload, dict) or not payload.get("character_class"):
+                raise ValueError("invalid profile response")
+            payload["requested_name"] = character_name
+            self.profile_loaded.emit(request_id, payload)
+        except urllib.error.HTTPError as error:
+            message = self._http_error_message(error)
+            self.lookup_failed.emit(request_id, message)
+        except urllib.error.URLError:
+            self.lookup_failed.emit(request_id, "자동 감지 서버에 연결할 수 없습니다.")
+        except TimeoutError:
+            self.lookup_failed.emit(request_id, "캐릭터 조회 시간이 초과되었습니다.")
+        except Exception:
+            self.lookup_failed.emit(request_id, "캐릭터 정보를 확인하지 못했습니다.")
+
+    @staticmethod
+    def _http_error_message(error):
+        try:
+            payload = json.loads(error.read().decode("utf-8"))
+            if isinstance(payload, dict) and payload.get("message"):
+                return str(payload["message"])
+        except Exception:
+            pass
+        if error.code == 404:
+            return "캐릭터를 찾을 수 없습니다. 이름을 확인해 주세요."
+        if error.code == 429:
+            return "조회 요청이 많습니다. 잠시 후 다시 시도해 주세요."
+        if error.code == 503:
+            return "캐릭터 자동 감지 기능을 준비 중입니다."
+        return "캐릭터 정보를 확인하지 못했습니다."
 
 
 class CooldownClient(QObject):

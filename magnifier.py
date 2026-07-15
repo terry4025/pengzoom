@@ -1479,6 +1479,9 @@ class SettingsModal(QDialog):
         self.spinner_timer.timeout.connect(self.rotate_spinner_icon)
         self.spinner_angle = 0
         self.client_connection_start_time = 0.0
+        self.character_lookup_in_progress = False
+        self.pending_connect_after_lookup = False
+        self.pending_lookup_name = ""
 
         
         self.setStyleSheet("""
@@ -1846,7 +1849,32 @@ class SettingsModal(QDialog):
             }
         """)
         char_row.addWidget(self.txt_char_name)
+        self.btn_lookup_character = QPushButton("직업 자동 감지")
+        self.btn_lookup_character.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(10, 132, 255, 0.12);
+                border: 1px solid rgba(10, 132, 255, 0.28);
+                border-radius: 8px;
+                color: #64a8ff;
+                padding: 6px 10px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton:hover { background-color: rgba(10, 132, 255, 0.22); }
+            QPushButton:disabled { color: #777777; background-color: rgba(255, 255, 255, 0.04); }
+        """)
+        self.btn_lookup_character.clicked.connect(self.lookup_character_class)
+        char_row.addWidget(self.btn_lookup_character)
         config_lay.addLayout(char_row)
+
+        self.lbl_character_lookup = QLabel(
+            f"현재 직업: {getattr(self.parent_window, 'player_class', '홀리나이트')} · 캐릭터명 입력 후 자동 감지"
+        )
+        self.lbl_character_lookup.setStyleSheet(
+            "color: #8e8e93; border: none; background: transparent; font-size: 12px; padding-left: 2px;"
+        )
+        config_lay.addWidget(self.lbl_character_lookup)
+        self.txt_char_name.editingFinished.connect(self.lookup_character_class)
 
         # Room ID Row
         room_row = QHBoxLayout()
@@ -2099,6 +2127,66 @@ class SettingsModal(QDialog):
                 slot.trigger_key = text.strip().lower() if text.strip() else None
                 self.parent_window.save_settings()
 
+    def lookup_character_class(self, connect_after=False):
+        char_name = self.txt_char_name.text().strip()
+        url = self.txt_host_url.text().strip()
+        if not char_name or not url:
+            return
+
+        if self.character_lookup_in_progress and self.pending_lookup_name.casefold() == char_name.casefold():
+            self.pending_connect_after_lookup = self.pending_connect_after_lookup or bool(connect_after)
+            return
+
+        self.character_lookup_in_progress = True
+        self.pending_connect_after_lookup = bool(connect_after)
+        self.pending_lookup_name = char_name
+        self.btn_lookup_character.setEnabled(False)
+        self.btn_lookup_character.setText("확인 중...")
+        self.lbl_character_lookup.setText("로스트아크에서 캐릭터 직업을 확인하는 중...")
+        self.lbl_character_lookup.setStyleSheet(
+            "color: #0a84ff; border: none; background: transparent; font-size: 12px; padding-left: 2px;"
+        )
+        self.parent_window.request_character_profile(char_name, url)
+
+    def on_character_lookup_succeeded(self, profile):
+        requested_name = str(profile.get("requested_name", "")).strip()
+        if requested_name.casefold() != self.txt_char_name.text().strip().casefold():
+            return
+
+        should_connect = self.pending_connect_after_lookup
+        self.character_lookup_in_progress = False
+        self.pending_connect_after_lookup = False
+        self.pending_lookup_name = ""
+        self.btn_lookup_character.setEnabled(True)
+        self.btn_lookup_character.setText("다시 감지")
+
+        class_name = profile.get("character_class", "")
+        server_name = profile.get("server_name", "")
+        suffix = f" · {server_name}" if server_name else ""
+        self.lbl_character_lookup.setText(f"직업 자동 설정 완료: {class_name}{suffix}")
+        self.lbl_character_lookup.setStyleSheet(
+            "color: #30d158; border: none; background: transparent; font-size: 12px; font-weight: 600; padding-left: 2px;"
+        )
+        if should_connect:
+            self._start_client_connection()
+
+    def on_character_lookup_failed(self, requested_name, message):
+        if requested_name.casefold() != self.pending_lookup_name.casefold():
+            return
+
+        should_connect = self.pending_connect_after_lookup
+        self.character_lookup_in_progress = False
+        self.pending_connect_after_lookup = False
+        self.pending_lookup_name = ""
+        self.btn_lookup_character.setEnabled(True)
+        self.btn_lookup_character.setText("다시 시도")
+        self.lbl_character_lookup.setText(f"자동 감지 실패: {message} 수동 설정 직업을 사용합니다.")
+        self.lbl_character_lookup.setStyleSheet(
+            "color: #ff9f0a; border: none; background: transparent; font-size: 12px; padding-left: 2px;"
+        )
+        if should_connect:
+            self._start_client_connection()
+
     def update_network_tab_texts(self):
         if self.parent_window.client_running:
             self.btn_toggle_client.setText("접속 끊기")
@@ -2132,7 +2220,6 @@ class SettingsModal(QDialog):
         self.lbl_client_icon.setPixmap(canvas)
 
     def toggle_client_connection(self):
-        import time
         char_name = self.txt_char_name.text().strip()
         url = self.txt_host_url.text().strip()
         room_id = self.txt_room_id.text().strip()
@@ -2149,21 +2236,37 @@ class SettingsModal(QDialog):
             show_dark_message_box(self, "방 코드 필요", "방 코드 (Room ID)를 입력하세요.", QMessageBox.Icon.Warning)
             return
             
-        self.parent_window.player_name = char_name
-        self.parent_window.server_url = url
-        self.parent_window.room_id = room_id
-        
         if self.parent_window.client_running:
             self.spinner_timer.stop()
             self.parent_window.stop_party_client()
+            self.update_network_tab_texts()
+            return
+
+        self.parent_window.player_name = char_name
+        self.parent_window.server_url = url
+        self.parent_window.room_id = room_id
+        resolved_name = getattr(self.parent_window, "resolved_character_name", "")
+        if resolved_name.casefold() != char_name.casefold():
+            self.lookup_character_class(connect_after=True)
         else:
-            self.client_connection_start_time = time.time()
-            self.spinner_angle = 0
-            self.lbl_client_icon.setVisible(True)
-            self.spinner_timer.start(30)
-            self.lbl_client_status.setText("동기화 연결 중...")
-            self.lbl_client_status.setStyleSheet("color: #0a84ff; font-weight: 600; border: none; background: transparent; font-size: 13px;")
-            self.parent_window.start_party_client()
+            self._start_client_connection()
+
+    def _start_client_connection(self):
+        import time
+        char_name = self.txt_char_name.text().strip()
+        if not char_name or self.parent_window.client_running:
+            return
+        self.parent_window.player_name = char_name
+        self.parent_window.server_url = self.txt_host_url.text().strip()
+        self.parent_window.room_id = self.txt_room_id.text().strip()
+        self.parent_window.save_settings()
+        self.client_connection_start_time = time.time()
+        self.spinner_angle = 0
+        self.lbl_client_icon.setVisible(True)
+        self.spinner_timer.start(30)
+        self.lbl_client_status.setText("동기화 연결 중...")
+        self.lbl_client_status.setStyleSheet("color: #0a84ff; font-weight: 600; border: none; background: transparent; font-size: 13px;")
+        self.parent_window.start_party_client()
         self.update_network_tab_texts()
 
     def toggle_party_panel_visible(self):
@@ -2500,7 +2603,7 @@ class ResizableContainer(QFrame):
 class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('펭구 줌인 Pro v2.34')
+        self.setWindowTitle('펭구 줌인 Pro v2.39')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
@@ -2528,11 +2631,20 @@ class MagnifierWindow(QMainWindow):
         self.client = None
         self.server_running = False
         self.client_running = False
+        self.resolved_character_name = ""
+        self.active_character_lookup_request = 0
         
         # Floating party statuses panel
         self.party_panel = PartyPanel(self)
         
         self.load_settings()
+        self.character_profile_lookup = network_manager.CharacterProfileLookup(self)
+        self.character_profile_lookup.profile_loaded.connect(
+            self.on_character_profile_loaded, Qt.ConnectionType.QueuedConnection
+        )
+        self.character_profile_lookup.lookup_failed.connect(
+            self.on_character_profile_failed, Qt.ConnectionType.QueuedConnection
+        )
         self.load_icon()
         
         # Register atexit process termination handler for double-safe auto-saving
@@ -3267,6 +3379,57 @@ class MagnifierWindow(QMainWindow):
                 pass
             self.server = None
         self.server_running = False
+
+    def request_character_profile(self, character_name, server_url=None):
+        lookup_url = (server_url or self.server_url).strip()
+        self.active_character_lookup_request = self.character_profile_lookup.lookup(
+            lookup_url,
+            character_name,
+        )
+
+    def on_character_profile_loaded(self, request_id, profile):
+        if request_id != self.active_character_lookup_request:
+            return
+
+        requested_name = str(profile.get("requested_name", "")).strip()
+        dialog = getattr(self, "config_dialog_ref", None)
+        if dialog and dialog.isVisible():
+            current_name = dialog.txt_char_name.text().strip()
+            if current_name.casefold() != requested_name.casefold():
+                return
+
+        class_name = str(profile.get("character_class", "")).strip()
+        if class_name not in LOST_ARK_CLASSES:
+            self.on_character_profile_failed(
+                request_id,
+                f"지원 목록에 없는 직업입니다: {class_name or '알 수 없음'}",
+            )
+            return
+
+        old_name = self.player_name
+        self.player_name = requested_name
+        self.player_class = class_name
+        self.resolved_character_name = requested_name
+
+        if old_name and old_name != requested_name:
+            self.party_panel.player_classes.pop(old_name, None)
+        self.party_panel.player_classes[requested_name] = class_name
+
+        if self.client and self.client.player_name.casefold() == requested_name.casefold():
+            self.client.set_class_name(class_name)
+            self.client.party_states.setdefault(self.client.player_name, {})["_class"] = class_name
+            self.party_panel.update_states(self.client.party_states)
+
+        self.save_settings()
+        if dialog and dialog.isVisible():
+            dialog.on_character_lookup_succeeded(profile)
+
+    def on_character_profile_failed(self, request_id, message):
+        if request_id != self.active_character_lookup_request:
+            return
+        dialog = getattr(self, "config_dialog_ref", None)
+        if dialog and dialog.isVisible():
+            dialog.on_character_lookup_failed(dialog.pending_lookup_name, message)
 
     # Client networking control (uses show_dark_message_box for gorgeous contrast popup)
     def start_party_client(self):
