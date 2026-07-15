@@ -10,11 +10,14 @@ import mss
 from PIL import Image
 from PyQt6.QtCore import QThread, pyqtSignal, QRect
 from cooldown_ocr import (
+    CAPTURE_PROFILE_ID,
+    CAPTURE_PROFILE_PREFIX,
     DEFAULT_DIGIT_ROI,
     DEFAULT_PROFILE_ID,
     CooldownOcrEngine,
     OcrDatasetCollector,
     build_profile_from_images,
+    train_capture_profile,
 )
 
 class SkillSlot:
@@ -79,6 +82,36 @@ class CooldownDetector(QThread):
         ) / "PengZoom" / "cooldown_captures"
         self._trigger_queue = queue.Queue()
         self._developer_sessions = {}
+        self.capture_import_result = {}
+
+    def import_developer_captures(self, force=False):
+        result = train_capture_profile(
+            self.developer_capture_root,
+            self.ocr_engine.profile_store,
+            force=force,
+        )
+        if result.get("ok"):
+            cached_ids = set(self.ocr_engine._profiles) | {CAPTURE_PROFILE_ID}
+            for profile_id in cached_ids:
+                if profile_id == CAPTURE_PROFILE_ID or profile_id.startswith(CAPTURE_PROFILE_PREFIX):
+                    self.ocr_engine._profiles.pop(profile_id, None)
+                    self.ocr_engine._models.pop(profile_id, None)
+                    self.ocr_engine._training_features.pop(profile_id, None)
+                    self.ocr_engine._training_labels.pop(profile_id, None)
+            for profile_id in result.get("profile_ids", []):
+                self.ocr_engine.reload_profile(profile_id)
+        self.capture_import_result = result
+        return result
+
+    def best_profile_for_slot(self, slot):
+        rect = self._rect_values(slot.rect) if slot else None
+        if not rect:
+            return DEFAULT_PROFILE_ID
+        ratio = getattr(slot, "device_ratio", None) or self.device_ratio
+        return self.ocr_engine.best_profile_id(
+            max(1, int(rect[2] * ratio)),
+            max(1, int(rect[3] * ratio)),
+        ) or DEFAULT_PROFILE_ID
         
     def add_slot(self, name, rect, threshold=0.85, template_img=None, template_color=None, cooldown_duration=0):
         previous = self.slots.get(name)
@@ -514,11 +547,15 @@ class CooldownDetector(QThread):
                         now_mono,
                     )
                     if observation.accepted and observation.seconds is not None:
+                        previous_seconds = slot.ocr_last_seconds
                         slot.ocr_last_seconds = int(observation.seconds)
                         slot.ocr_last_confidence = float(observation.confidence)
                         slot.ocr_last_confirmed_at = now_mono
                         slot.ocr_active = True
-                        self.cooldown_observed.emit(name, slot.ocr_last_seconds, slot.ocr_last_confidence)
+                        if previous_seconds != slot.ocr_last_seconds:
+                            self.cooldown_observed.emit(
+                                name, slot.ocr_last_seconds, slot.ocr_last_confidence
+                            )
 
                     payload = observation.quality_payload()
                     payload["profile_id"] = slot.ocr_profile_id

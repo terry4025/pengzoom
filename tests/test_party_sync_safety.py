@@ -3,6 +3,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -12,7 +13,7 @@ from PyQt6.QtWidgets import QApplication
 
 from cooldown_detector import CooldownDetector
 from cooldown_ocr import OcrObservation
-from magnifier import PartyPanel
+from magnifier import MagnifierWindow, PartyPanel
 
 
 class _FakeScreenCapture:
@@ -53,6 +54,25 @@ class PartySyncSafetyTests(unittest.TestCase):
         self.assertFalse(widgets["is_ready"])
         self.assertEqual(widgets["status_text_lbl"].text(), "Cooldown")
         panel.close()
+
+    def test_primary_ocr_seconds_send_when_manual_duration_is_zero(self):
+        sent = []
+        client = SimpleNamespace(
+            send_update=lambda name, ready, duration: sent.append((name, ready, duration))
+        )
+        slot = SimpleNamespace(ocr_mode="primary", is_ready=False, cooldown_duration=0)
+        fake_window = SimpleNamespace(
+            client_running=True,
+            client=client,
+            detector=SimpleNamespace(
+                slots={"skill": slot},
+                get_remaining_seconds=lambda name: 0,
+            ),
+        )
+
+        MagnifierWindow.on_cooldown_observed(fake_window, "skill", 12, 0.99)
+
+        self.assertEqual(sent, [("skill", False, 12)])
 
     def test_elapsed_countdown_does_not_promote_ready(self):
         panel = PartyPanel()

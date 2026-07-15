@@ -12,7 +12,9 @@ from cooldown_ocr import (
     OcrObservation,
     OcrProfileStore,
     _TemporalState,
+    _suffix_and_digit_boxes,
     benchmark_profile,
+    validated_capture_images,
 )
 
 
@@ -45,6 +47,39 @@ class ProfileTests(unittest.TestCase):
                       and 1 <= row["expected"] <= 30]
         self.assertEqual(len(continuous), 30)
         self.assertTrue(all(row["accepted"] and row["observed"] == row["expected"] for row in continuous))
+
+    def test_small_suffix_keeps_thin_leading_one_and_second_digit(self):
+        binary = np.zeros((21, 31), dtype=np.uint8)
+        cv2.rectangle(binary, (6, 6), (8, 17), 255, -1)
+        cv2.rectangle(binary, (14, 5), (21, 17), 255, 1)
+        cv2.rectangle(binary, (24, 9), (29, 13), 255, -1)
+
+        suffix, digits = _suffix_and_digit_boxes(binary)
+
+        self.assertEqual(suffix[0], 24)
+        self.assertEqual(len(digits), 2)
+        self.assertEqual([box[0] for box in digits], [6, 14])
+
+    def test_capture_validation_rejects_session_with_empty_one_second_frame(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            good = root / "good"
+            late = root / "late"
+            good.mkdir()
+            late.mkdir()
+            for seconds in (3, 2, 1):
+                (good / f"skill_{seconds}s.png").touch()
+                (late / f"skill_{seconds}s.png").touch()
+
+            def segmentable(path, label, digit_roi):
+                return not (path.parent.name == "late" and label == 1)
+
+            with mock.patch("cooldown_ocr._capture_frame_is_segmentable", side_effect=segmentable):
+                paths, stats = validated_capture_images(root)
+
+        self.assertEqual(len(paths), 3)
+        self.assertEqual(stats["accepted_sessions"], 1)
+        self.assertEqual(stats["rejected_sessions"], 1)
 
 
 class TemporalFilterTests(unittest.TestCase):

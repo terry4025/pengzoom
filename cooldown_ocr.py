@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import math
 import os
 import re
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +27,8 @@ import numpy as np
 
 PROFILE_VERSION = 1
 DEFAULT_PROFILE_ID = "lostark_1080p_100"
+CAPTURE_PROFILE_ID = "lostark_capture_auto"  # legacy combined profile (v2.44 pre-release)
+CAPTURE_PROFILE_PREFIX = "lostark_capture_"
 DEFAULT_DIGIT_ROI = (0.12, 0.24, 0.68, 0.40)
 GLYPH_SIZE = (12, 16)  # width, height
 SUPPORTED_THRESHOLDS = (145, 160, 175, 190)
@@ -478,7 +482,10 @@ def _suffix_and_digit_boxes(binary: np.ndarray, expected_digits: Optional[int] =
     suffix_candidates = [
         c for c in comps
         if c[0] >= int(rw * 0.38) and c[2] <= max(14, int(rw * 0.45))
-        and c[3] >= max(6, int(rh * 0.38)) and c[1] <= int(rh * 0.65)
+        # At the actual 1080p HUD scale the lower-case ``s`` can be only
+        # 4-6 pixels tall.  The old 38% gate mistook the last digit for ``s``
+        # and therefore read 10s/17s as a single leading digit.
+        and c[3] >= max(4, int(math.floor(rh * 0.22))) and c[1] <= int(rh * 0.72)
     ]
     if not suffix_candidates:
         return None, []
@@ -489,7 +496,8 @@ def _suffix_and_digit_boxes(binary: np.ndarray, expected_digits: Optional[int] =
     for x, y, w, h, area in comps:
         if x + w > sx + 1:
             continue
-        if h < max(8, int(math.ceil(rh * 0.58))) or h > rh:
+        # Thin ``1`` glyphs can be one pixel shorter than the other digits.
+        if h < max(8, int(math.ceil(rh * 0.50))) or h > rh:
             continue
         if w > max(11, int(rw * 0.35)):
             continue
@@ -543,6 +551,13 @@ class CooldownOcrEngine:
         self._training_features[profile_id] = feature_matrix
         self._training_labels[profile_id] = np.asarray(labels, np.int32)
         return profile
+
+    def reload_profile(self, profile_id: str) -> Optional[OcrProfile]:
+        self._profiles.pop(profile_id, None)
+        self._models.pop(profile_id, None)
+        self._training_features.pop(profile_id, None)
+        self._training_labels.pop(profile_id, None)
+        return self.load_profile(profile_id)
 
     def recognize(self, slot_id: str, frame_rgb: np.ndarray, profile_id: str = DEFAULT_PROFILE_ID,
                   digit_roi: Optional[Iterable[float]] = None, now: Optional[float] = None) -> OcrObservation:
@@ -761,6 +776,219 @@ def benchmark_profile(profile_path: Path, image_paths: Iterable[Path]) -> dict:
 
 def _image_paths(root: Path) -> list[Path]:
     return sorted(root.rglob("*.png"), key=lambda p: p.name)
+
+
+def _bundled_default_profile() -> Optional[OcrProfile]:
+    """Load the pristine bundled seed without consulting the user profile dir."""
+    path = _resource_path(f"ocr_profiles/{DEFAULT_PROFILE_ID}.json")
+    try:
+        if path.exists():
+            profile = OcrProfile.from_dict(json.loads(path.read_text(encoding="utf-8")))
+            if profile.version == PROFILE_VERSION and profile.trained:
+                return profile
+    except Exception:
+        pass
+    try:
+        from ocr_default_profile import PROFILE_DATA
+        profile = OcrProfile.from_dict(PROFILE_DATA)
+        return profile if profile.version == PROFILE_VERSION and profile.trained else None
+    except Exception:
+        return None
+
+
+def _capture_frame_is_segmentable(path: Path, label: int,
+                                  digit_roi: Iterable[float]) -> bool:
+    image = _read_image(path)
+    if image is None or label < 1:
+        return False
+    roi, _ = _crop_normalized(image, digit_roi)
+    expected_digits = len(str(label))
+    for threshold in SUPPORTED_THRESHOLDS:
+        suffix_box, boxes = _suffix_and_digit_boxes(
+            _make_binary(roi, threshold), expected_digits
+        )
+        if suffix_box is not None and len(boxes) == expected_digits:
+            return True
+    return False
+
+
+def validated_capture_images(capture_root: Path,
+                             digit_roi: Iterable[float] = DEFAULT_DIGIT_ROI) -> tuple[list[Path], dict]:
+    """Return only complete sessions whose labels match visible countdown flow.
+
+    A capture started late typically stores an empty ``*_1s.png`` frame, while
+    an Alt+Tab session contains no usable suffix at all.  Rejecting the entire
+    session prevents those mislabeled images from poisoning the digit model.
+    """
+    root = Path(capture_root)
+    if not root.exists():
+        return [], {"sessions": 0, "accepted_sessions": 0, "rejected_sessions": 0, "images": 0}
+
+    session_dirs = sorted(path for path in root.iterdir() if path.is_dir())
+    if not session_dirs and any(root.glob("*.png")):
+        session_dirs = [root]
+
+    accepted_paths: list[Path] = []
+    accepted_sessions = 0
+    rejected_sessions = 0
+    session_details = []
+    for session_dir in session_dirs:
+        rows = []
+        for path in sorted(session_dir.glob("*.png")):
+            label = _parse_label(path)
+            if label is None:
+                continue
+            rows.append((path, label, _capture_frame_is_segmentable(path, label, digit_roi)))
+        segmented = sum(1 for _, _, ok in rows if ok)
+        final_one_ok = any(label == 1 and ok for _, label, ok in rows)
+        ratio = segmented / len(rows) if rows else 0.0
+        labels = sorted({label for _, label, _ in rows})
+        contiguous = bool(labels) and labels == list(range(1, max(labels) + 1))
+        accepted = len(rows) >= 3 and final_one_ok and ratio >= 0.80 and contiguous
+        if accepted:
+            accepted_sessions += 1
+            accepted_paths.extend(path for path, _, ok in rows if ok)
+        else:
+            rejected_sessions += 1
+        session_details.append({
+            "session": session_dir.name,
+            "images": len(rows),
+            "segmented": segmented,
+            "accepted": accepted,
+        })
+
+    return accepted_paths, {
+        "sessions": len(session_dirs),
+        "accepted_sessions": accepted_sessions,
+        "rejected_sessions": rejected_sessions,
+        "images": len(accepted_paths),
+        "details": session_details,
+    }
+
+
+def train_capture_profile(capture_root: Path,
+                          profile_store: Optional[OcrProfileStore] = None,
+                          force: bool = False) -> dict:
+    """Build validated profiles grouped by exact physical slot pixel size."""
+    store = profile_store or OcrProfileStore()
+    paths, validation = validated_capture_images(capture_root)
+    if len(paths) < 10:
+        return {"ok": False, "error": "검증을 통과한 캡처 이미지가 10장 미만입니다.", **validation}
+
+    base_profile = _bundled_default_profile()
+    if base_profile is None:
+        return {"ok": False, "error": "기본 OCR 프로필을 불러오지 못했습니다.", **validation}
+
+    groups: dict[tuple[int, int], list[Path]] = {}
+    for path in paths:
+        image = _read_image(path)
+        if image is not None:
+            groups.setdefault((image.shape[1], image.shape[0]), []).append(path)
+
+    root = Path(capture_root)
+    profile_results = []
+    pending_installs = []
+    try:
+        with tempfile.TemporaryDirectory(prefix="capture_profile_", dir=str(store.root)) as temp_dir:
+            for (width, height), group_paths in sorted(groups.items()):
+                if len(group_paths) < 10:
+                    continue
+                profile_id = f"{CAPTURE_PROFILE_PREFIX}{width}x{height}"
+                fingerprint = hashlib.sha256()
+                for path in group_paths:
+                    fingerprint.update(str(path.relative_to(root)).encode("utf-8", "surrogatepass"))
+                    fingerprint.update(path.read_bytes())
+                source = f"developer-captures:{width}x{height}:{fingerprint.hexdigest()}"
+                target = store.path_for(profile_id)
+                use_existing = False
+                if not force and target.exists():
+                    try:
+                        existing = OcrProfile.from_dict(json.loads(target.read_text(encoding="utf-8")))
+                        use_existing = existing.source == source
+                    except Exception:
+                        use_existing = False
+
+                if use_existing:
+                    output = target
+                    training = {"images": len(group_paths), "segmented_images": len(group_paths),
+                                "output": str(target), "skipped": True}
+                else:
+                    output = Path(temp_dir) / f"{profile_id}.json"
+                    _, training = build_profile_from_images(
+                        group_paths,
+                        output,
+                        profile_id=profile_id,
+                        digit_roi=DEFAULT_DIGIT_ROI,
+                        source=source,
+                        base_profile=base_profile,
+                    )
+
+                benchmark = benchmark_profile(output, group_paths)
+                benchmark_summary = {
+                    key: benchmark[key] for key in (
+                        "total", "accepted", "correct", "false_confirm", "unknown",
+                        "confirmed_accuracy", "unknown_rate",
+                    )
+                }
+                if benchmark["false_confirm"] > 0 or benchmark["unknown_rate"] > 0.10:
+                    return {
+                        "ok": False,
+                        "error": f"{width}×{height} 학습 품질 기준을 통과하지 못했습니다.",
+                        "training": training,
+                        "benchmark": benchmark_summary,
+                        **validation,
+                    }
+                if not use_existing:
+                    pending_installs.append((output, target))
+                profile_results.append({
+                    "profile_id": profile_id,
+                    "slot_size": [width, height],
+                    "images": len(group_paths),
+                    "training": training,
+                    "benchmark": benchmark_summary,
+                    "skipped": use_existing,
+                })
+
+            if not profile_results:
+                return {"ok": False, "error": "크기별 학습에 필요한 표본이 부족합니다.", **validation}
+            for output, target in pending_installs:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(output, target)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), **validation}
+
+    # Remove obsolete auto-generated sizes and the short-lived combined profile;
+    # mixing different pixel sizes can make one scale steal another digit.
+    active_profile_ids = {item["profile_id"] for item in profile_results}
+    for old_profile in store.root.glob(f"{CAPTURE_PROFILE_PREFIX}*.json"):
+        if old_profile.stem in active_profile_ids:
+            continue
+        try:
+            old_profile.unlink()
+        except Exception:
+            pass
+
+    total = sum(item["benchmark"]["total"] for item in profile_results)
+    accepted = sum(item["benchmark"]["accepted"] for item in profile_results)
+    correct = sum(item["benchmark"]["correct"] for item in profile_results)
+    false_confirm = sum(item["benchmark"]["false_confirm"] for item in profile_results)
+    unknown = sum(item["benchmark"]["unknown"] for item in profile_results)
+    return {
+        "ok": True,
+        "skipped": all(item["skipped"] for item in profile_results),
+        "profile_ids": [item["profile_id"] for item in profile_results],
+        "profiles": profile_results,
+        "benchmark": {
+            "total": total,
+            "accepted": accepted,
+            "correct": correct,
+            "false_confirm": false_confirm,
+            "unknown": unknown,
+            "confirmed_accuracy": correct / accepted if accepted else 0.0,
+            "unknown_rate": unknown / total if total else 0.0,
+        },
+        **validation,
+    }
 
 
 def main() -> int:

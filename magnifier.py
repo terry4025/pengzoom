@@ -1934,6 +1934,9 @@ class SettingsModal(QDialog):
         self.ocr_diagnostics_check = QCheckBox("저신뢰 슬롯 이미지 저장 (최대 100MB)")
         self.ocr_diagnostics_check.toggled.connect(self.on_ocr_controls_changed)
         profile_row.addWidget(self.ocr_diagnostics_check)
+        self.ocr_train_captures_btn = QPushButton("캡처 폴더 학습")
+        self.ocr_train_captures_btn.clicked.connect(self.train_developer_capture_profile)
+        profile_row.addWidget(self.ocr_train_captures_btn)
         lay.addLayout(profile_row)
 
         preview_row = QHBoxLayout()
@@ -2073,10 +2076,24 @@ class SettingsModal(QDialog):
         if roi[0] + roi[2] > 1.0 or roi[1] + roi[3] > 1.0 or roi[2] < 0.05 or roi[3] < 0.05:
             self.ocr_quality_status.setText("ROI가 슬롯 밖으로 나가거나 너무 작습니다.")
             return
+        selected_profile = self.ocr_profile_combo.currentText().strip() or cooldown_detector.DEFAULT_PROFILE_ID
+        if (
+            self.ocr_mode_combo.currentData() == "primary"
+            and (
+                selected_profile in (
+                    cooldown_detector.DEFAULT_PROFILE_ID,
+                    cooldown_detector.CAPTURE_PROFILE_ID,
+                )
+            )
+        ):
+            selected_profile = self.parent_window.detector.best_profile_for_slot(slot)
+            self.ocr_profile_combo.blockSignals(True)
+            self.ocr_profile_combo.setCurrentText(selected_profile)
+            self.ocr_profile_combo.blockSignals(False)
         self.parent_window.detector.configure_ocr(
             name,
             mode=self.ocr_mode_combo.currentData(),
-            profile_id=self.ocr_profile_combo.currentText().strip() or cooldown_detector.DEFAULT_PROFILE_ID,
+            profile_id=selected_profile,
             digit_roi=roi,
             save_diagnostics=self.ocr_diagnostics_check.isChecked(),
         )
@@ -2089,6 +2106,39 @@ class SettingsModal(QDialog):
             spin.blockSignals(False)
         self.on_ocr_controls_changed()
         self.ocr_quality_status.setText("1920×1080 / 100% 기본 숫자 영역으로 자동 맞춤했습니다.")
+
+    def train_developer_capture_profile(self):
+        self.ocr_train_captures_btn.setEnabled(False)
+        self.ocr_quality_status.setText("캡처 폴더를 검증하고 숫자 프로필을 학습하는 중...")
+        QApplication.processEvents()
+        result = self.parent_window.detector.import_developer_captures(force=True)
+        self.ocr_train_captures_btn.setEnabled(True)
+        if not result.get("ok"):
+            self.ocr_quality_status.setText(
+                f"캡처 학습 실패: {result.get('error', '알 수 없는 오류')} · "
+                f"제외 세션 {result.get('rejected_sessions', 0)}개"
+            )
+            return
+
+        profile_ids = result.get("profile_ids", [])
+        for profile_id in profile_ids:
+            if self.ocr_profile_combo.findText(profile_id) < 0:
+                self.ocr_profile_combo.addItem(profile_id)
+        for slot in self.parent_window.detector.slots.values():
+            if slot.ocr_mode == "primary":
+                slot.ocr_profile_id = self.parent_window.detector.best_profile_for_slot(slot)
+        selected = self.parent_window.detector.slots.get(self.ocr_skill_combo.currentText())
+        if selected is not None:
+            self.ocr_profile_combo.setCurrentText(selected.ocr_profile_id)
+        self.parent_window.save_settings()
+        benchmark = result.get("benchmark", {})
+        accuracy = float(benchmark.get("confirmed_accuracy", 0.0)) * 100.0
+        self.ocr_quality_status.setText(
+            f"캡처 학습 완료 · 크기별 프로필 {len(profile_ids)}개 · "
+            f"사용 {result.get('accepted_sessions', 0)}세션/"
+            f"{result.get('images', 0)}장 · 제외 {result.get('rejected_sessions', 0)}세션 · "
+            f"학습 표본 정확도 {accuracy:.1f}%"
+        )
 
     def start_ocr_collection(self):
         name = self.ocr_skill_combo.currentText()
@@ -3027,7 +3077,7 @@ class ResizableContainer(QFrame):
 class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('펭구 줌인 Pro v2.43')
+        self.setWindowTitle('펭구 줌인 Pro v2.44')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
@@ -3048,6 +3098,7 @@ class MagnifierWindow(QMainWindow):
         self.detector = cooldown_detector.CooldownDetector()
         self.detector.device_ratio = QApplication.primaryScreen().devicePixelRatio()
         self.detector.state_changed.connect(self.on_skill_state_changed)
+        self.detector.cooldown_observed.connect(self.on_cooldown_observed)
         self.detector.start_detection(50)  # Scan every 50ms (runs inside background QThread)
         
         # Network objects
@@ -3167,6 +3218,10 @@ class MagnifierWindow(QMainWindow):
 
     def load_settings(self):
         config_path = self.get_config_path()
+        # Valid developer captures are converted into a dedicated OCR profile
+        # before persisted slots are restored, so 0-second automatic mode can
+        # use the newly collected digits immediately after app startup.
+        self.detector.import_developer_captures()
         
         # Default fallbacks
         self.zoom_factor = 2.0
@@ -3295,7 +3350,6 @@ class MagnifierWindow(QMainWindow):
                         digit_roi = s_info.get("digit_roi", list(cooldown_detector.DEFAULT_DIGIT_ROI))
                         slot_device_ratio = s_info.get("device_ratio", self.detector.device_ratio)
                         ocr_save_diagnostics = s_info.get("ocr_save_diagnostics", False)
-                        
                         rect = QRect(rect_val[0], rect_val[1], rect_val[2], rect_val[3]) if rect_val else None
                         
                         template_img = None
@@ -3315,6 +3369,22 @@ class MagnifierWindow(QMainWindow):
                         slot = self.detector.slots.get(name)
                         if slot:
                             slot.trigger_key = trigger_key
+                            slot.device_ratio = slot_device_ratio
+                            if (
+                                ocr_mode == "primary"
+                                and self.detector.capture_import_result.get("ok")
+                                and (
+                                    ocr_profile_id in (
+                                        cooldown_detector.DEFAULT_PROFILE_ID,
+                                        cooldown_detector.CAPTURE_PROFILE_ID,
+                                    )
+                                    or (
+                                        ocr_profile_id.startswith(cooldown_detector.CAPTURE_PROFILE_PREFIX)
+                                        and ocr_profile_id not in self.detector.ocr_engine.available_profiles()
+                                    )
+                                )
+                            ):
+                                ocr_profile_id = self.detector.best_profile_for_slot(slot)
                             self.detector.configure_ocr(
                                 name,
                                 mode=ocr_mode,
@@ -3771,6 +3841,15 @@ class MagnifierWindow(QMainWindow):
             if slot:
                 duration = self.detector.get_remaining_seconds(name) if not is_ready else 0
                 self.client.send_update(name, is_ready, duration)
+
+    def on_cooldown_observed(self, name, seconds, confidence):
+        """Push accepted OCR seconds immediately; manual duration may be zero."""
+        if not self.client_running or not self.client:
+            return
+        slot = self.detector.slots.get(name)
+        if slot and slot.ocr_mode == "primary" and not slot.is_ready:
+            duration = self.detector.get_remaining_seconds(name)
+            self.client.send_update(name, False, duration or int(seconds))
 
     def broadcast_skill_states(self):
         # Periodically send all registered skill states to keep party server alive and sync initial states
