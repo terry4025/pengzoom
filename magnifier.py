@@ -869,7 +869,7 @@ class PartyPanel(QWidget):
                     del p_data["skill_widgets"][s]
                     
             for skill, s_info in (skills.items() if isinstance(skills, dict) else {}):
-                if skill.startswith('_'):
+                if not isinstance(skill, str) or skill.startswith('_') or not isinstance(s_info, dict):
                     continue
                 is_ready = s_info.get("is_ready", True)
                 cooldown_duration = s_info.get("cooldown_duration", 0)
@@ -954,9 +954,15 @@ class PartyPanel(QWidget):
         
         for player, p_data in list(self.widgets.items()):
             for skill, s_widgets in list(p_data["skill_widgets"].items()):
-                is_ready = s_widgets["is_ready"]
-                cd_duration = s_widgets["cooldown_duration"]
-                timestamp = s_widgets["timestamp"]
+                is_ready = bool(s_widgets.get("is_ready", True))
+                try:
+                    cd_duration = max(0.0, float(s_widgets.get("cooldown_duration", 0) or 0))
+                except (TypeError, ValueError):
+                    cd_duration = 0.0
+                try:
+                    timestamp = float(s_widgets.get("timestamp", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    timestamp = 0.0
                 
                 remaining = 0.0
                 if not is_ready and cd_duration > 0:
@@ -991,16 +997,24 @@ class PartyPanel(QWidget):
                 else:
                     s_widgets["glow"].hide()
                     s_widgets["progress"].show()
-                    
-                    pct = (remaining / cd_duration) * 100.0
-                    s_widgets["progress"].setValue(pct)
-                    
-                    if remaining >= 1.0:
-                        s_widgets["progress"].setText(f"{int(math.ceil(remaining))}")
-                        s_widgets["status_text_lbl"].setText(f"{int(math.ceil(remaining))}s")
+
+                    if cd_duration > 0.0:
+                        pct = (remaining / cd_duration) * 100.0
+                        s_widgets["progress"].setValue(pct)
+
+                        if remaining >= 1.0:
+                            s_widgets["progress"].setText(f"{int(math.ceil(remaining))}")
+                            s_widgets["status_text_lbl"].setText(f"{int(math.ceil(remaining))}s")
+                        else:
+                            s_widgets["progress"].setText(f"{remaining:.1f}")
+                            s_widgets["status_text_lbl"].setText(f"{remaining:.1f}s")
                     else:
-                        s_widgets["progress"].setText(f"{remaining:.1f}")
-                        s_widgets["status_text_lbl"].setText(f"{remaining:.1f}s")
+                        # Legacy clients or an OCR frame still being acquired can
+                        # legitimately report not-ready without a duration.  Show
+                        # an indeterminate state and never divide by zero.
+                        s_widgets["progress"].setValue(0.0)
+                        s_widgets["progress"].setText("…")
+                        s_widgets["status_text_lbl"].setText("인식 중")
                         
                     s_widgets["status_text_lbl"].setStyleSheet(f"color: {theme['cooldown']}; font-size: {int(9*self.ui_scale)}px; font-weight: bold;")
                     s_widgets["badge"].setStyleSheet(f"QFrame.SkillBadge {{ background-color: rgba(255, 69, 58, 0.03); border: 1.2px solid rgba(255, 69, 58, 0.12); }}")
@@ -2886,7 +2900,7 @@ class ResizableContainer(QFrame):
 class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('펭구 줌인 Pro v2.41')
+        self.setWindowTitle('펭구 줌인 Pro v2.42')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
@@ -3624,6 +3638,8 @@ class MagnifierWindow(QMainWindow):
             slot = self.detector.slots.get(name)
             if slot:
                 duration = self.detector.get_remaining_seconds(name) if not is_ready else 0
+                if not is_ready and duration <= 0:
+                    return
                 self.client.send_update(name, is_ready, duration)
 
     def broadcast_skill_states(self):
@@ -3631,6 +3647,8 @@ class MagnifierWindow(QMainWindow):
         if self.client_running and self.client:
             for name, slot in self.detector.slots.items():
                 duration = self.detector.get_remaining_seconds(name) if not slot.is_ready else 0
+                if not slot.is_ready and duration <= 0:
+                    continue
                 self.client.send_update(name, slot.is_ready, duration)
 
     # Server hosting control (uses show_dark_message_box for gorgeous contrast popup)

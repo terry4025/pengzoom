@@ -374,6 +374,15 @@ class CooldownDetector(QThread):
                         new_ready = False
                     elif ocr_ready_confirmed:
                         new_ready = True
+                    elif slot.ocr_active:
+                        # During a brief unknown OCR frame, keep the active
+                        # cooldown instead of letting template noise override it.
+                        new_ready = False
+                    else:
+                        # In OCR-authoritative mode a Ready-template mismatch is
+                        # not evidence that cooldown started.  Only a confirmed
+                        # number may transition Ready -> cooldown.
+                        new_ready = slot.is_ready
                 
                 # 3. Update state if changed or timer just expired
                 if new_ready != slot.is_ready or timer_expired:
