@@ -505,6 +505,19 @@ class CooldownClient(QObject):
                 self.ws.sendTextMessage(json.dumps(update_msg))
             except Exception as e:
                 self.connection_failed.emit(f"웹소켓 전송 실패: {str(e)}")
+
+    def set_class_name(self, class_name):
+        """Persist and immediately share a class change without waiting for a skill event."""
+        self.class_name = class_name
+        if not self.is_running or self.ws.state() != QAbstractSocket.SocketState.ConnectedState:
+            return
+        self.ws.sendTextMessage(json.dumps({
+            "action": "class",
+            "room_id": self.room_id,
+            "player": self.player_name,
+            "client_id": self.client_id,
+            "class_name": self.class_name,
+        }))
             
     def on_message_received(self, message):
         try:
@@ -547,6 +560,12 @@ class CooldownClient(QObject):
                 player = data.get("player")
                 if player:
                     self.party_states.pop(player, None)
+                    self.status_updated.emit(self.party_states)
+            elif msg_type == "class":
+                player = data.get("player")
+                class_name = data.get("class_name")
+                if player and class_name:
+                    self.party_states.setdefault(player, {})["_class"] = class_name
                     self.status_updated.emit(self.party_states)
         except Exception as e:
             pass

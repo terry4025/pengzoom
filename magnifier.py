@@ -405,35 +405,42 @@ class InputBridge(QObject):
     toggle_click_through = pyqtSignal()
     toggle_hide = pyqtSignal()
 
-# Lost Ark Class Emblems mapping to Stove CDN keys (Korean Only)
+# Official Lost Ark class SVG identifiers from the live Class page.
+# These SVGs cover the current Korean class roster and remain sharp at HUD size.
 LOST_ARK_CLASSES = {
-    "홀리나이트": "holyknight",
-    "워로드": "warlord",
     "버서커": "berserker",
     "디스트로이어": "destroyer",
+    "워로드": "warlord",
+    "홀리나이트": "holyknight",
+    "슬레이어": "slayer",
+    "발키리": "valkyrie",
+    "스트라이커": "striker",
+    "브레이커": "breaker",
+    "배틀마스터": "battlemaster",
     "인파이터": "infighter",
+    "기공사": "soulmaster",
+    "창술사": "lancemaster",
     "블래스터": "blaster",
     "스카우터": "scouter",
+    "데빌헌터": "devilhunter",
+    "호크아이": "hawkeye",
+    "건슬링어": "gunslinger",
     "바드": "bard",
     "서머너": "summoner",
     "아르카나": "arcana",
+    "소서리스": "magician",
     "블레이드": "blade",
     "데모닉": "demonic",
     "리퍼": "reaper",
-    "소서리스": "magician",
-    "도화가": "specialist",
-    "기상술사": "weather_artist",
-    "슬레이어": "berserker_female",
-    "소울이터": "soul_eater",
-    "브레이커": "infighter_male",
-    "배틀마스터": "elemental_master",
-    "기공사": "force_master",
-    "창술사": "lance_master",
-    "스트라이커": "battle_master_male",
-    "데빌헌터": "devil_hunter",
-    "호크아이": "hawk_eye",
-    "건슬링어": "devil_hunter_female"
+    "소울이터": "souleater",
+    "도화가": "artist",
+    "기상술사": "aeromancer",
+    "환수사": "wildsoul",
+    "차원술사": "dimension_master",
+    "가디언나이트": "dragon_knight",
 }
+
+CLASS_ICON_CDN = "https://cdn-lostark.game.onstove.com/2018/obt/assets/images/common/class"
 
 # Use APPDATA-based cache dir for EXE compatibility
 if getattr(sys, 'frozen', False):
@@ -449,24 +456,34 @@ _icon_download_in_progress = set()
 _icon_download_callbacks = {}
 _icon_download_lock = threading.Lock()
 
+def is_valid_class_icon(path):
+    try:
+        if not os.path.exists(path) or os.path.getsize(path) < 500:
+            return False
+        with open(path, "rb") as icon_file:
+            return b"<svg" in icon_file.read(512).lower()
+    except OSError:
+        return False
+
 def get_class_icon(class_name):
-    base_key = LOST_ARK_CLASSES.get(class_name, "holyknight")
-    local_path = os.path.join(CACHE_DIR, f"emblem_{base_key}.png")
+    base_key = LOST_ARK_CLASSES.get(class_name)
+    if not base_key:
+        return None
+    local_path = os.path.join(CACHE_DIR, f"class_{base_key}.svg")
     
-    # Return cached file only if it has valid content (>500 bytes)
-    if os.path.exists(local_path) and os.path.getsize(local_path) > 500:
+    if is_valid_class_icon(local_path):
         return local_path
     
     # Skip if already failed this session
     if base_key in _icon_download_failed:
         return None
     
-    url = f"https://cdn-lostark.game.onstove.com/2018/obt/assets/images/common/thumb/emblem_{base_key}.png"
+    url = f"{CLASS_ICON_CDN}/{base_key}.svg"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=5.0) as res:
             data = res.read()
-            if len(data) > 500:  # Valid PNG
+            if len(data) > 500 and b"<svg" in data[:512].lower():
                 with open(local_path, "wb") as f:
                     f.write(data)
                 return local_path
@@ -479,7 +496,10 @@ def get_class_icon(class_name):
 
 def get_class_icon_async(class_name, callback):
     """Download once per class and deliver every waiting callback when it completes."""
-    base_key = LOST_ARK_CLASSES.get(class_name, "holyknight")
+    base_key = LOST_ARK_CLASSES.get(class_name)
+    if not base_key:
+        callback(None)
+        return
     with _icon_download_lock:
         if base_key in _icon_download_failed:
             callback(None)
@@ -813,24 +833,30 @@ class PartyPanel(QWidget):
             self.player_classes[player] = class_name
             
             def _apply_icon(path, lbl=p_data["icon_lbl"]):
-                if path and os.path.exists(path) and os.path.getsize(path) > 500:
-                    pixmap = QPixmap(path)
-                    if not pixmap.isNull():
-                        lbl.setPixmap(pixmap.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                if path and is_valid_class_icon(path):
+                    renderer = QSvgRenderer(path)
+                    if renderer.isValid():
+                        pixmap = QPixmap(18, 18)
+                        pixmap.fill(Qt.GlobalColor.transparent)
+                        painter = QPainter(pixmap)
+                        renderer.render(painter)
+                        painter.end()
+                        lbl.setPixmap(pixmap)
                         return
                 lbl.setStyleSheet("background-color: rgba(255, 255, 255, 0.05); border-radius: 9px;")
             
             # Try cached first (instant), else async download
-            base_key = LOST_ARK_CLASSES.get(class_name, "holyknight")
-            cached_path = os.path.join(CACHE_DIR, f"emblem_{base_key}.png")
-            if os.path.exists(cached_path) and os.path.getsize(cached_path) > 500:
+            base_key = LOST_ARK_CLASSES.get(class_name)
+            cached_path = os.path.join(CACHE_DIR, f"class_{base_key}.svg") if base_key else None
+            if cached_path and is_valid_class_icon(cached_path):
                 _apply_icon(cached_path)
             else:
                 p_data["icon_lbl"].setStyleSheet("background-color: rgba(255, 255, 255, 0.05); border-radius: 9px;")
-                get_class_icon_async(
-                    class_name,
-                    lambda path, apply_icon=_apply_icon: self.icon_downloaded.emit(path, apply_icon)
-                )
+                if base_key:
+                    get_class_icon_async(
+                        class_name,
+                        lambda path, apply_icon=_apply_icon: self.icon_downloaded.emit(path, apply_icon)
+                    )
                 
             for s in list(p_data["skill_widgets"].keys()):
                 if s not in skills:
@@ -1374,6 +1400,12 @@ class PartyOverlaySettingsModal(QDialog):
     def change_player_class(self, player, text):
         if self.overlay:
             self.overlay.player_classes[player] = text
+        if player == self.parent_window.player_name:
+            self.parent_window.player_class = text
+            if self.parent_window.client:
+                self.parent_window.client.set_class_name(text)
+            self.parent_window.save_settings()
+        if self.overlay:
             self.overlay.rebuild_cards()
             self.overlay.apply_theme()
             
