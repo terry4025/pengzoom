@@ -79,7 +79,7 @@ class CaptureOverlay(QDialog):
             if w > 5 and h > 5:
                 try:
                     # Get device pixel ratio for correct DPI scaling adjustments
-                    screen = QApplication.primaryScreen()
+                    screen = QApplication.screenAt(rect.center()) or QApplication.primaryScreen()
                     ratio = screen.devicePixelRatio()
                     
                     # Convert logical coordinates to physical coordinates for mss

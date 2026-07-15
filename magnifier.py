@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout,
                              QHBoxLayout, QWidget, QFrame, QPushButton, QSlider, 
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
                              QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
-                             QCheckBox, QSpinBox, QComboBox)
+                             QCheckBox, QSpinBox, QComboBox, QDoubleSpinBox)
 from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject, QSize, QPropertyAnimation, QEasingCurve, QEvent
 from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence, QWheelEvent, QFont, QBrush
 from PyQt6.QtSvg import QSvgRenderer
@@ -1588,8 +1588,13 @@ class SettingsModal(QDialog):
         tab_skills = QWidget()
         self.setup_skills_tab(tab_skills)
         self.tabs.addTab(tab_skills, "스킬 감지")
+
+        # Tab 3: Cooldown OCR calibration and quality diagnostics
+        tab_ocr = QWidget()
+        self.setup_ocr_tab(tab_ocr)
+        self.tabs.addTab(tab_ocr, "OCR 캘리브레이션")
         
-        # Tab 3: Network Party Settings
+        # Tab 4: Network Party Settings
         tab_network = QWidget()
         self.setup_network_tab(tab_network)
         self.tabs.addTab(tab_network, "파티 연동")
@@ -1608,7 +1613,7 @@ class SettingsModal(QDialog):
         container_layout.addLayout(btn_layout)
         layout.addWidget(container)
         
-        self.resize(460, 480)
+        self.resize(620, 650)
         self.old_pos = None
 
     def setup_hotkeys_tab(self, tab):
@@ -1798,6 +1803,278 @@ class SettingsModal(QDialog):
         self.lbl_selected_status.setStyleSheet("font-size: 11px; color: #ffd60a;")
         self.lbl_selected_status.setWordWrap(True)
         lay.addWidget(self.lbl_selected_status)
+
+    def setup_ocr_tab(self, tab):
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(9)
+
+        select_row = QHBoxLayout()
+        select_row.addWidget(QLabel("OCR 슬롯:"))
+        self.ocr_skill_combo = QComboBox()
+        self.ocr_skill_combo.currentTextChanged.connect(self.on_ocr_skill_changed)
+        select_row.addWidget(self.ocr_skill_combo, 2)
+        select_row.addWidget(QLabel("판정 모드:"))
+        self.ocr_mode_combo = QComboBox()
+        self.ocr_mode_combo.addItem("꺼짐", "off")
+        self.ocr_mode_combo.addItem("Shadow (비교 로그)", "shadow")
+        self.ocr_mode_combo.addItem("OCR 자동", "primary")
+        self.ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_controls_changed)
+        select_row.addWidget(self.ocr_mode_combo, 2)
+        lay.addLayout(select_row)
+
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel("배율 프로필:"))
+        self.ocr_profile_combo = QComboBox()
+        self.ocr_profile_combo.setEditable(True)
+        profile_names = self.parent_window.detector.ocr_engine.available_profiles()
+        for profile_name in profile_names or [cooldown_detector.DEFAULT_PROFILE_ID]:
+            self.ocr_profile_combo.addItem(profile_name)
+        self.ocr_profile_combo.currentTextChanged.connect(self.on_ocr_controls_changed)
+        profile_row.addWidget(self.ocr_profile_combo, 1)
+        self.ocr_diagnostics_check = QCheckBox("저신뢰 슬롯 이미지 저장 (최대 100MB)")
+        self.ocr_diagnostics_check.toggled.connect(self.on_ocr_controls_changed)
+        profile_row.addWidget(self.ocr_diagnostics_check)
+        lay.addLayout(profile_row)
+
+        preview_row = QHBoxLayout()
+        self.ocr_original_frame, self.ocr_original_preview = self._make_ocr_preview("원본 슬롯")
+        self.ocr_roi_frame, self.ocr_roi_preview = self._make_ocr_preview("숫자 ROI")
+        self.ocr_binary_frame, self.ocr_binary_preview = self._make_ocr_preview("이진화·경계")
+        preview_row.addWidget(self.ocr_original_frame)
+        preview_row.addWidget(self.ocr_roi_frame)
+        preview_row.addWidget(self.ocr_binary_frame)
+        lay.addLayout(preview_row)
+
+        roi_title = QLabel("숫자 ROI 미세 조정 (슬롯 크기 대비 비율)")
+        roi_title.setStyleSheet("font-size: 12px; font-weight: 600; color: #cccccc;")
+        lay.addWidget(roi_title)
+        roi_row = QHBoxLayout()
+        self.ocr_roi_spins = []
+        for label_text, value in zip(("X", "Y", "너비", "높이"), cooldown_detector.DEFAULT_DIGIT_ROI):
+            roi_row.addWidget(QLabel(label_text))
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 1.0)
+            spin.setDecimals(3)
+            spin.setSingleStep(0.01)
+            spin.setValue(value)
+            spin.valueChanged.connect(self.on_ocr_controls_changed)
+            self.ocr_roi_spins.append(spin)
+            roi_row.addWidget(spin)
+        self.ocr_auto_roi_btn = QPushButton("1080p 자동 맞춤")
+        self.ocr_auto_roi_btn.clicked.connect(self.auto_fit_ocr_roi)
+        roi_row.addWidget(self.ocr_auto_roi_btn)
+        lay.addLayout(roi_row)
+
+        calibration_box = QFrame()
+        calibration_box.setStyleSheet(
+            "QFrame { background: rgba(10,132,255,0.06); border: 1px solid rgba(10,132,255,0.20); "
+            "border-radius: 9px; } QLabel { border: none; background: transparent; }"
+        )
+        cal_lay = QVBoxLayout(calibration_box)
+        cal_lay.setContentsMargins(10, 8, 10, 8)
+        cal_lay.setSpacing(6)
+        instruction = QLabel(
+            "프로필 보정은 선택 사항입니다. 화면에 시작 숫자가 나타나는 순간 아래 녹화를 누르세요. "
+            "슬롯 이미지만 15FPS로 로컬 저장하며 전체 화면이나 서버 업로드는 하지 않습니다."
+        )
+        instruction.setWordWrap(True)
+        instruction.setStyleSheet("color: #a9cfff; font-size: 11px;")
+        cal_lay.addWidget(instruction)
+        cal_row = QHBoxLayout()
+        cal_row.addWidget(QLabel("시작 숫자:"))
+        self.ocr_calibration_seconds = QSpinBox()
+        self.ocr_calibration_seconds.setRange(10, 9999)
+        self.ocr_calibration_seconds.setValue(30)
+        self.ocr_calibration_seconds.setSuffix(" 초")
+        cal_row.addWidget(self.ocr_calibration_seconds)
+        self.ocr_start_collection_btn = QPushButton("15FPS 프로필 녹화 시작")
+        self.ocr_start_collection_btn.clicked.connect(self.start_ocr_collection)
+        cal_row.addWidget(self.ocr_start_collection_btn)
+        self.ocr_stop_collection_btn = QPushButton("중지·프로필 학습")
+        self.ocr_stop_collection_btn.clicked.connect(self.stop_ocr_collection)
+        self.ocr_stop_collection_btn.setEnabled(False)
+        cal_row.addWidget(self.ocr_stop_collection_btn)
+        cal_lay.addLayout(cal_row)
+        lay.addWidget(calibration_box)
+
+        self.ocr_quality_status = QLabel("슬롯을 선택하면 OCR 인식 품질이 여기에 표시됩니다.")
+        self.ocr_quality_status.setWordWrap(True)
+        self.ocr_quality_status.setStyleSheet("font-size: 11px; color: #ffd60a;")
+        lay.addWidget(self.ocr_quality_status)
+
+        self.refresh_ocr_skill_combo()
+        self.ocr_preview_timer = QTimer(self)
+        self.ocr_preview_timer.timeout.connect(self.refresh_ocr_preview)
+        self.ocr_preview_timer.start(250)
+
+    def _make_ocr_preview(self, title):
+        frame = QFrame()
+        frame.setStyleSheet(
+            "QFrame { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.10); "
+            "border-radius: 8px; } QLabel { border: none; background: transparent; }"
+        )
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(6, 6, 6, 6)
+        heading = QLabel(title)
+        heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        heading.setStyleSheet("font-size: 10px; color: #aaaaaa;")
+        layout.addWidget(heading)
+        preview = QLabel("대기 중")
+        preview.setMinimumSize(150, 88)
+        preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview.setStyleSheet("background: #050505; color: #555555; border-radius: 5px;")
+        layout.addWidget(preview)
+        return frame, preview
+
+    def refresh_ocr_skill_combo(self):
+        if not hasattr(self, "ocr_skill_combo"):
+            return
+        selected = self.ocr_skill_combo.currentText()
+        self.ocr_skill_combo.blockSignals(True)
+        self.ocr_skill_combo.clear()
+        self.ocr_skill_combo.addItems(list(self.parent_window.detector.slots.keys()))
+        index = self.ocr_skill_combo.findText(selected)
+        self.ocr_skill_combo.setCurrentIndex(index if index >= 0 else (0 if self.ocr_skill_combo.count() else -1))
+        self.ocr_skill_combo.blockSignals(False)
+        self.on_ocr_skill_changed(self.ocr_skill_combo.currentText())
+
+    def on_ocr_skill_changed(self, name):
+        slot = self.parent_window.detector.slots.get(name)
+        controls = [self.ocr_mode_combo, self.ocr_profile_combo, self.ocr_diagnostics_check,
+                    self.ocr_auto_roi_btn, self.ocr_start_collection_btn, *self.ocr_roi_spins]
+        for control in controls:
+            control.setEnabled(slot is not None)
+        if slot is None:
+            return
+        self.ocr_mode_combo.blockSignals(True)
+        mode_index = self.ocr_mode_combo.findData(slot.ocr_mode)
+        self.ocr_mode_combo.setCurrentIndex(max(0, mode_index))
+        self.ocr_mode_combo.blockSignals(False)
+        self.ocr_profile_combo.blockSignals(True)
+        self.ocr_profile_combo.setCurrentText(slot.ocr_profile_id)
+        self.ocr_profile_combo.blockSignals(False)
+        self.ocr_diagnostics_check.blockSignals(True)
+        self.ocr_diagnostics_check.setChecked(slot.ocr_save_diagnostics)
+        self.ocr_diagnostics_check.blockSignals(False)
+        for spin, value in zip(self.ocr_roi_spins, slot.digit_roi):
+            spin.blockSignals(True)
+            spin.setValue(float(value))
+            spin.blockSignals(False)
+        self.refresh_ocr_preview()
+
+    def on_ocr_controls_changed(self, *args):
+        if not hasattr(self, "ocr_skill_combo"):
+            return
+        name = self.ocr_skill_combo.currentText()
+        slot = self.parent_window.detector.slots.get(name)
+        if slot is None:
+            return
+        roi = [spin.value() for spin in self.ocr_roi_spins]
+        if roi[0] + roi[2] > 1.0 or roi[1] + roi[3] > 1.0 or roi[2] < 0.05 or roi[3] < 0.05:
+            self.ocr_quality_status.setText("ROI가 슬롯 밖으로 나가거나 너무 작습니다.")
+            return
+        self.parent_window.detector.configure_ocr(
+            name,
+            mode=self.ocr_mode_combo.currentData(),
+            profile_id=self.ocr_profile_combo.currentText().strip() or cooldown_detector.DEFAULT_PROFILE_ID,
+            digit_roi=roi,
+            save_diagnostics=self.ocr_diagnostics_check.isChecked(),
+        )
+        self.parent_window.save_settings()
+
+    def auto_fit_ocr_roi(self):
+        for spin, value in zip(self.ocr_roi_spins, cooldown_detector.DEFAULT_DIGIT_ROI):
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+        self.on_ocr_controls_changed()
+        self.ocr_quality_status.setText("1920×1080 / 100% 기본 숫자 영역으로 자동 맞춤했습니다.")
+
+    def start_ocr_collection(self):
+        name = self.ocr_skill_combo.currentText()
+        try:
+            path = self.parent_window.detector.start_calibration_collection(
+                name, self.ocr_calibration_seconds.value()
+            )
+            self.ocr_start_collection_btn.setEnabled(False)
+            self.ocr_stop_collection_btn.setEnabled(True)
+            self.ocr_quality_status.setText(f"녹화 중: {path} · 화면 숫자가 1초가 될 때까지 유지해 주세요.")
+        except Exception as exc:
+            show_dark_message_box(self, "OCR 녹화", str(exc), QMessageBox.Icon.Warning)
+
+    def stop_ocr_collection(self):
+        self.ocr_stop_collection_btn.setEnabled(False)
+        self.ocr_quality_status.setText("수집 이미지를 분석해 사용자 프로필을 만드는 중...")
+        QApplication.processEvents()
+        result = self.parent_window.detector.stop_calibration_collection(train=True)
+        self.ocr_start_collection_btn.setEnabled(True)
+        if result.get("ok"):
+            self.ocr_quality_status.setText(
+                f"프로필 학습 완료 · {result.get('segmented_images', 0)}개 숫자 프레임 · "
+                f"새 글리프 {result.get('added_glyphs', 0)}개 (전체 {result.get('glyphs', 0)}개)"
+            )
+        else:
+            self.ocr_quality_status.setText(f"프로필 학습 실패: {result.get('error', '알 수 없는 오류')}")
+
+    def refresh_ocr_preview(self):
+        if not hasattr(self, "ocr_skill_combo"):
+            return
+        slot = self.parent_window.detector.slots.get(self.ocr_skill_combo.currentText())
+        if slot is None:
+            return
+        payload = getattr(slot, "last_ocr_quality", {}) or {}
+        frame = payload.get("frame")
+        roi = payload.get("digit_roi_image")
+        binary = payload.get("binary_image")
+        self._set_ocr_preview_image(self.ocr_original_preview, frame)
+        self._set_ocr_preview_image(self.ocr_roi_preview, roi)
+        if binary is not None:
+            marked = cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB)
+            for box in payload.get("digit_boxes", []):
+                x, y, w, h = [int(v) for v in box]
+                cv2.rectangle(marked, (x, y), (x + w, y + h), (48, 209, 88), 1)
+            suffix = payload.get("suffix_box")
+            if suffix:
+                x, y, w, h = [int(v) for v in suffix]
+                cv2.rectangle(marked, (x, y), (x + w, y + h), (255, 214, 10), 1)
+            self._set_ocr_preview_image(self.ocr_binary_preview, marked)
+        else:
+            self._set_ocr_preview_image(self.ocr_binary_preview, None)
+
+        if payload:
+            confidence = float(payload.get("confidence", 0.0)) * 100.0
+            value = payload.get("seconds") if payload.get("accepted") else "unknown"
+            reason = payload.get("reject_reason") or "정상 확정"
+            collecting = f" · 수집 {payload.get('frame_count', 0)}프레임" if payload.get("collecting") else ""
+            self.ocr_quality_status.setText(
+                f"현재 값: {value}초 · 신뢰도 {confidence:.1f}% · {reason} · "
+                f"보간 {payload.get('remaining', 0)}초 · 프로필 {payload.get('profile_id', '-')}{collecting}"
+            )
+
+    @staticmethod
+    def _set_ocr_preview_image(label, image):
+        if image is None or not isinstance(image, np.ndarray) or image.size == 0:
+            label.setPixmap(QPixmap())
+            label.setText("대기 중")
+            return
+        try:
+            if image.ndim == 2:
+                h, w = image.shape
+                qimage = QImage(image.data.tobytes(), w, h, w, QImage.Format.Format_Grayscale8)
+            else:
+                rgb = image[:, :, :3]
+                h, w = rgb.shape[:2]
+                qimage = QImage(rgb.data.tobytes(), w, h, w * 3, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimage).scaled(
+                label.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation
+            )
+            label.setText("")
+            label.setPixmap(pixmap)
+        except Exception:
+            label.setPixmap(QPixmap())
+            label.setText("미리보기 실패")
 
     def setup_network_tab(self, tab):
         lay = QVBoxLayout(tab)
@@ -2007,6 +2284,8 @@ class SettingsModal(QDialog):
                 
         if target_item:
             self.skill_list.setCurrentItem(target_item)
+        if hasattr(self, "ocr_skill_combo"):
+            self.refresh_ocr_skill_combo()
 
     def add_new_skill_slot(self):
         name, ok = get_dark_input_text(self, "스킬 추가", "감지할 스킬 이름을 입력하세요:")
@@ -2055,6 +2334,10 @@ class SettingsModal(QDialog):
             return
             
         name = curr.text()
+        if hasattr(self, "ocr_skill_combo"):
+            index = self.ocr_skill_combo.findText(name)
+            if index >= 0:
+                self.ocr_skill_combo.setCurrentIndex(index)
         slot = self.parent_window.detector.slots.get(name)
         if slot:
             self.spin_cooldown.setEnabled(True)
@@ -2603,7 +2886,7 @@ class ResizableContainer(QFrame):
 class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('펭구 줌인 Pro v2.40')
+        self.setWindowTitle('펭구 줌인 Pro v2.41')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
@@ -2862,6 +3145,11 @@ class MagnifierWindow(QMainWindow):
                         threshold = s_info.get("threshold", 0.85)
                         cooldown_duration = s_info.get("cooldown_duration", 0)
                         trigger_key = s_info.get("trigger_key", None)
+                        ocr_mode = s_info.get("ocr_mode", "shadow")
+                        ocr_profile_id = s_info.get("ocr_profile_id", cooldown_detector.DEFAULT_PROFILE_ID)
+                        digit_roi = s_info.get("digit_roi", list(cooldown_detector.DEFAULT_DIGIT_ROI))
+                        slot_device_ratio = s_info.get("device_ratio", self.detector.device_ratio)
+                        ocr_save_diagnostics = s_info.get("ocr_save_diagnostics", False)
                         
                         rect = QRect(rect_val[0], rect_val[1], rect_val[2], rect_val[3]) if rect_val else None
                         
@@ -2882,6 +3170,14 @@ class MagnifierWindow(QMainWindow):
                         slot = self.detector.slots.get(name)
                         if slot:
                             slot.trigger_key = trigger_key
+                            self.detector.configure_ocr(
+                                name,
+                                mode=ocr_mode,
+                                profile_id=ocr_profile_id,
+                                digit_roi=digit_roi,
+                                device_ratio=slot_device_ratio,
+                                save_diagnostics=ocr_save_diagnostics,
+                            )
                     if not self.client_id:
                         import uuid
                         self.client_id = str(uuid.uuid4())
@@ -2908,7 +3204,12 @@ class MagnifierWindow(QMainWindow):
                     "rect": rect_val,
                     "threshold": slot.threshold,
                     "cooldown_duration": slot.cooldown_duration,
-                    "trigger_key": getattr(slot, 'trigger_key', None)
+                    "trigger_key": getattr(slot, 'trigger_key', None),
+                    "ocr_mode": getattr(slot, 'ocr_mode', "shadow"),
+                    "ocr_profile_id": getattr(slot, 'ocr_profile_id', cooldown_detector.DEFAULT_PROFILE_ID),
+                    "digit_roi": list(getattr(slot, 'digit_roi', cooldown_detector.DEFAULT_DIGIT_ROI)),
+                    "device_ratio": getattr(slot, 'device_ratio', None) or self.detector.device_ratio,
+                    "ocr_save_diagnostics": bool(getattr(slot, 'ocr_save_diagnostics', False))
                 })
                 
                 # Write CV2 templates to file with non-ascii Windows compatibility using numpy tofile
@@ -3298,6 +3599,14 @@ class MagnifierWindow(QMainWindow):
             rect = QRect(x, y, w, h)
             # Add to detector (already cv2 array from CaptureOverlay)
             self.detector.add_slot(self.cooldown_capture_name, rect, threshold=0.85, template_img=captured_gray)
+            screen = QApplication.screenAt(QPoint(x + w // 2, y + h // 2)) or QApplication.primaryScreen()
+            ratio = screen.devicePixelRatio()
+            best_profile = self.detector.ocr_engine.best_profile_id(int(w * ratio), int(h * ratio))
+            self.detector.configure_ocr(
+                self.cooldown_capture_name,
+                profile_id=best_profile,
+                device_ratio=ratio,
+            )
             
             # Auto-save changes immediately to preserve skill slots template images
             self.save_settings()
@@ -3314,26 +3623,14 @@ class MagnifierWindow(QMainWindow):
         if self.client_running and self.client:
             slot = self.detector.slots.get(name)
             if slot:
-                duration = 0
-                if not is_ready:
-                    if slot.cooldown_start_time > 0.0:
-                        elapsed = time.time() - slot.cooldown_start_time
-                        remaining = slot.cooldown_duration - elapsed
-                        if remaining > 0:
-                            duration = int(math.ceil(remaining))
+                duration = self.detector.get_remaining_seconds(name) if not is_ready else 0
                 self.client.send_update(name, is_ready, duration)
 
     def broadcast_skill_states(self):
         # Periodically send all registered skill states to keep party server alive and sync initial states
         if self.client_running and self.client:
             for name, slot in self.detector.slots.items():
-                duration = 0
-                if not slot.is_ready:
-                    if slot.cooldown_start_time > 0.0:
-                        elapsed = time.time() - slot.cooldown_start_time
-                        remaining = slot.cooldown_duration - elapsed
-                        if remaining > 0:
-                            duration = int(math.ceil(remaining))
+                duration = self.detector.get_remaining_seconds(name) if not slot.is_ready else 0
                 self.client.send_update(name, slot.is_ready, duration)
 
     # Server hosting control (uses show_dark_message_box for gorgeous contrast popup)
