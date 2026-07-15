@@ -441,6 +441,7 @@ LOST_ARK_CLASSES = {
 }
 
 CLASS_ICON_CDN = "https://cdn-lostark.game.onstove.com/2018/obt/assets/images/common/class"
+CLASS_ICON_SIZE = 22
 
 # Use APPDATA-based cache dir for EXE compatibility
 if getattr(sys, 'frozen', False):
@@ -791,7 +792,7 @@ class PartyPanel(QWidget):
                 name_row.setSpacing(6)
                 
                 icon_lbl = QLabel()
-                icon_lbl.setFixedSize(18, 18)
+                icon_lbl.setFixedSize(CLASS_ICON_SIZE, CLASS_ICON_SIZE)
                 icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                 
                 name_lbl = QLabel(player)
@@ -836,7 +837,7 @@ class PartyPanel(QWidget):
                 if path and is_valid_class_icon(path):
                     renderer = QSvgRenderer(path)
                     if renderer.isValid():
-                        pixmap = QPixmap(18, 18)
+                        pixmap = QPixmap(CLASS_ICON_SIZE, CLASS_ICON_SIZE)
                         pixmap.fill(Qt.GlobalColor.transparent)
                         painter = QPainter(pixmap)
                         renderer.render(painter)
