@@ -317,6 +317,14 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
                 with STATE_LOCK:
                     if room_id in WEBSOCKET_CLIENTS:
                         WEBSOCKET_CLIENTS[room_id].discard(self)
+                    # Remove player from PARTY_STATES when they disconnect
+                    if room_id in PARTY_STATES and player_name in PARTY_STATES[room_id]:
+                        del PARTY_STATES[room_id][player_name]
+                    # Also clean up ROOM_CLIENT_MAP entry so reconnect is fresh
+                    if room_id in ROOM_CLIENT_MAP:
+                        keys_to_remove = [k for k, v in ROOM_CLIENT_MAP[room_id].items() if v == player_name]
+                        for k in keys_to_remove:
+                            del ROOM_CLIENT_MAP[room_id][k]
 
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):

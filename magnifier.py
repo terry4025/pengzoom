@@ -434,23 +434,53 @@ LOST_ARK_CLASSES = {
     "건슬링어": "devil_hunter_female"
 }
 
-CACHE_DIR = os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "scratch", "cache")
+# Use APPDATA-based cache dir for EXE compatibility
+if getattr(sys, 'frozen', False):
+    _appdata = os.environ.get('APPDATA', os.path.expanduser('~'))
+    CACHE_DIR = os.path.join(_appdata, 'PengZoom', 'cache')
+else:
+    CACHE_DIR = os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "scratch", "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+# Set of class keys that failed to download — skip retry within same session
+_icon_download_failed = set()
 
 def get_class_icon(class_name):
     base_key = LOST_ARK_CLASSES.get(class_name, "holyknight")
     local_path = os.path.join(CACHE_DIR, f"emblem_{base_key}.png")
     
-    if not os.path.exists(local_path):
-        url = f"https://cdn-lostark.game.onstove.com/2018/obt/assets/images/common/thumb/emblem_{base_key}.png"
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=2.0) as res:
+    # Return cached file only if it has valid content (>500 bytes)
+    if os.path.exists(local_path) and os.path.getsize(local_path) > 500:
+        return local_path
+    
+    # Skip if already failed this session
+    if base_key in _icon_download_failed:
+        return None
+    
+    url = f"https://cdn-lostark.game.onstove.com/2018/obt/assets/images/common/thumb/emblem_{base_key}.png"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5.0) as res:
+            data = res.read()
+            if len(data) > 500:  # Valid PNG
                 with open(local_path, "wb") as f:
-                    f.write(res.read())
-        except Exception:
-            return None
-    return local_path
+                    f.write(data)
+                return local_path
+            else:
+                _icon_download_failed.add(base_key)
+                return None
+    except Exception:
+        _icon_download_failed.add(base_key)
+        return None
+
+def get_class_icon_async(class_name, callback):
+    """Download class icon in background thread, call callback(path_or_None) on main thread."""
+    def _worker():
+        path = get_class_icon(class_name)
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: callback(path))
+    import threading
+    threading.Thread(target=_worker, daemon=True).start()
 
 # Preset Styling Themes for Party Overlay
 THEMES = {
@@ -753,15 +783,23 @@ class PartyPanel(QWidget):
             # Fetch emblem from the server or local mapping
             class_name = skills.get("_class", self.player_classes.get(player, "홀리나이트")) if isinstance(skills, dict) else "홀리나이트"
             self.player_classes[player] = class_name
-            icon_path = get_class_icon(class_name)
-            if icon_path and os.path.exists(icon_path) and os.path.getsize(icon_path) > 0:
-                pixmap = QPixmap(icon_path)
-                if not pixmap.isNull():
-                    p_data["icon_lbl"].setPixmap(pixmap.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-                else:
-                    p_data["icon_lbl"].setStyleSheet("background-color: rgba(255, 255, 255, 0.05); border-radius: 9px;")
+            
+            def _apply_icon(path, lbl=p_data["icon_lbl"]):
+                if path and os.path.exists(path) and os.path.getsize(path) > 500:
+                    pixmap = QPixmap(path)
+                    if not pixmap.isNull():
+                        lbl.setPixmap(pixmap.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                        return
+                lbl.setStyleSheet("background-color: rgba(255, 255, 255, 0.05); border-radius: 9px;")
+            
+            # Try cached first (instant), else async download
+            base_key = LOST_ARK_CLASSES.get(class_name, "holyknight")
+            cached_path = os.path.join(CACHE_DIR, f"emblem_{base_key}.png")
+            if os.path.exists(cached_path) and os.path.getsize(cached_path) > 500:
+                _apply_icon(cached_path)
             else:
                 p_data["icon_lbl"].setStyleSheet("background-color: rgba(255, 255, 255, 0.05); border-radius: 9px;")
+                get_class_icon_async(class_name, _apply_icon)
                 
             for s in list(p_data["skill_widgets"].keys()):
                 if s not in skills:
