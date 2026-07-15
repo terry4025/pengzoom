@@ -42,10 +42,10 @@ class SkillSlot:
         self._not_ready_consec_frames = 0
         self.device_ratio = None
 
-        # OCR starts in Shadow mode so existing users can compare it with the
-        # manual timer before explicitly promoting a slot to OCR authority.
-        self.ocr_enabled = True
-        self.ocr_mode = "shadow"  # off | shadow | primary
+        # Cooldown seconds are manual-only. OCR fields remain as dormant
+        # compatibility state so older config files can be loaded safely.
+        self.ocr_enabled = False
+        self.ocr_mode = "off"  # legacy compatibility: off | shadow | primary
         self.ocr_profile_id = DEFAULT_PROFILE_ID
         self.digit_roi = list(DEFAULT_DIGIT_ROI)
         self.ocr_last_seconds = None
@@ -165,9 +165,10 @@ class CooldownDetector(QThread):
         slot = self.slots.get(name)
         if not slot:
             return False
-        if mode is not None:
-            slot.ocr_mode = mode if mode in ("off", "shadow", "primary") else "shadow"
-            slot.ocr_enabled = slot.ocr_mode != "off"
+        # v2.46 retired cooldown-number OCR. Keep accepting this legacy API so
+        # old callers/config migrations do not crash, but never enable scans.
+        slot.ocr_mode = "off"
+        slot.ocr_enabled = False
         if profile_id:
             slot.ocr_profile_id = str(profile_id)
         if digit_roi is not None and len(digit_roi) == 4:
@@ -175,7 +176,7 @@ class CooldownDetector(QThread):
         if device_ratio is not None:
             slot.device_ratio = max(0.5, float(device_ratio))
         if save_diagnostics is not None:
-            slot.ocr_save_diagnostics = bool(save_diagnostics)
+            slot.ocr_save_diagnostics = False
         return True
 
     def start_calibration_collection(self, name, start_seconds):
@@ -261,8 +262,8 @@ class CooldownDetector(QThread):
             if self.developer_capture_enabled and name in self._developer_sessions:
                 continue
 
-            # Manual time is Shadow/display bookkeeping only.  It never owns
-            # Ready; the Ready-template recognizer is the sole state authority.
+            # Manual time owns the displayed/broadcast remaining seconds.
+            # Ready still requires the saved skill template to be confirmed.
             if slot.cooldown_duration > 0:
                 slot.cooldown_start_time = trigger_wall
                 slot.cooldown_seen_unready = False
@@ -430,9 +431,6 @@ class CooldownDetector(QThread):
         slot = self.slots.get(name)
         if not slot:
             return 0
-        if slot.ocr_mode == "primary" and slot.ocr_active and slot.ocr_last_seconds is not None:
-            elapsed = max(0.0, time.monotonic() - slot.ocr_last_confirmed_at)
-            return max(0, int(np.ceil(slot.ocr_last_seconds - elapsed)))
         if slot.cooldown_start_time > 0.0:
             return max(0, int(np.ceil(slot.cooldown_duration - (time.time() - slot.cooldown_start_time))))
         return 0
@@ -521,63 +519,13 @@ class CooldownDetector(QThread):
                 )
                 template_ready = self._resolve_skill_recognition(slot, raw_ready)
                 skill_recognition_updated = True
-                # Commit before any OCR/dataset work.  A cooldown OCR failure
-                # must never suppress the higher-priority skill recognizer.
+                # Commit skill recognition before manual timer bookkeeping.
                 if template_ready != slot.is_ready:
                     slot.is_ready = template_ready
                     self.state_changed.emit(name, template_ready, max_val)
 
-                if self.collecting_slot_name == name and self.dataset_collector.active:
-                    self.dataset_collector.add_frame(captured_rgb, now_mono)
-
-                # 2. Cooldown-number OpenCV — measurement only, never Ready state.
-                observation = None
-                if slot.ocr_enabled and now_mono + 1e-6 >= slot.ocr_next_scan_at:
-                    slot.ocr_last_scan_at = now_mono
-                    if slot.ocr_next_scan_at <= 0.0:
-                        slot.ocr_next_scan_at = now_mono + self.ocr_interval
-                    else:
-                        while slot.ocr_next_scan_at <= now_mono:
-                            slot.ocr_next_scan_at += self.ocr_interval
-                    observation = self.ocr_engine.recognize(
-                        name,
-                        captured_rgb,
-                        slot.ocr_profile_id,
-                        slot.digit_roi,
-                        now_mono,
-                    )
-                    if observation.accepted and observation.seconds is not None:
-                        previous_seconds = slot.ocr_last_seconds
-                        slot.ocr_last_seconds = int(observation.seconds)
-                        slot.ocr_last_confidence = float(observation.confidence)
-                        slot.ocr_last_confirmed_at = now_mono
-                        slot.ocr_active = True
-                        if previous_seconds != slot.ocr_last_seconds:
-                            self.cooldown_observed.emit(
-                                name, slot.ocr_last_seconds, slot.ocr_last_confidence
-                            )
-
-                    payload = observation.quality_payload()
-                    payload["profile_id"] = slot.ocr_profile_id
-                    payload["mode"] = slot.ocr_mode
-                    payload["remaining"] = self.get_ocr_remaining_seconds(name)
-                    payload["collecting"] = self.collecting_slot_name == name
-                    payload["frame_count"] = self.dataset_collector.frame_count if payload["collecting"] else 0
-                    payload["frame"] = captured_rgb.copy()
-                    payload["digit_roi_image"] = observation.digit_roi_image.copy() if observation.digit_roi_image is not None else None
-                    payload["binary_image"] = observation.binary_image.copy() if observation.binary_image is not None else None
-                    slot.last_ocr_quality = payload
-                    slot.last_ocr_frame = payload["frame"]
-                    slot.last_ocr_binary = payload["binary_image"]
-                    self.ocr_quality.emit(name, payload)
-                    self.ocr_engine.logger.save_low_confidence = slot.ocr_save_diagnostics
-                    self.ocr_engine.logger.log(
-                        name, slot.ocr_profile_id, observation,
-                        interpolated=payload["remaining"],
-                        frame=captured_rgb if slot.ocr_save_diagnostics else None,
-                    )
-                
-                # 3. Manual Shadow timer bookkeeping.  Expiry cannot create Ready.
+                # Manual timer expiry cannot create Ready. Some skills remain
+                # unavailable after cooldown until their resource is restored.
                 if slot.cooldown_start_time > 0.0:
                     if not raw_ready:
                         slot.cooldown_seen_unready = True
@@ -588,17 +536,7 @@ class CooldownDetector(QThread):
                         if elapsed >= slot.cooldown_duration:
                             slot.cooldown_start_time = 0.0
 
-                # 4. A confirmed Ready template closes the OCR temporal cycle.
-                if slot._ready_consec_frames >= 3 and slot.ocr_active:
-                    slot.ocr_active = False
-                    slot.ocr_last_seconds = None
-                    slot.ocr_last_confirmed_at = 0.0
-                    self.ocr_engine.mark_ready(name)
-
-            except Exception as exc:
-                payload = {"accepted": False, "reject_reason": f"detector_error:{type(exc).__name__}"}
-                slot.last_ocr_quality = payload
-                self.ocr_quality.emit(name, payload)
+            except Exception:
                 if not skill_recognition_updated:
                     failed_ready = self._resolve_skill_recognition(slot, False)
                     if failed_ready != slot.is_ready:

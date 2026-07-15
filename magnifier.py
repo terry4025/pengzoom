@@ -1654,12 +1654,7 @@ class SettingsModal(QDialog):
         self.setup_skills_tab(tab_skills)
         self.tabs.addTab(tab_skills, "스킬 감지")
 
-        # Tab 3: Cooldown OCR calibration and quality diagnostics
-        tab_ocr = QWidget()
-        self.setup_ocr_tab(tab_ocr)
-        self.tabs.addTab(tab_ocr, "OCR 캘리브레이션")
-        
-        # Tab 4: Network Party Settings
+        # Tab 3: Network Party Settings
         tab_network = QWidget()
         self.setup_network_tab(tab_network)
         self.tabs.addTab(tab_network, "파티 연동")
@@ -1869,39 +1864,15 @@ class SettingsModal(QDialog):
         self.lbl_selected_status.setWordWrap(True)
         lay.addWidget(self.lbl_selected_status)
 
-        capture_line = QFrame()
-        capture_line.setFrameShape(QFrame.Shape.HLine)
-        capture_line.setStyleSheet("background-color: rgba(255,255,255,0.06);")
-        lay.addWidget(capture_line)
-
-        self.chk_developer_capture = QCheckBox(
-            "개발자 캡처 모드 (트리거 후 슬롯을 1초마다 저장)"
+        manual_notice = QLabel(
+            "남은 쿨타임은 입력한 초와 트리거 단축키로 계산합니다. "
+            "Ready 판정은 저장된 스킬 스냅샷을 사용합니다."
         )
-        self.chk_developer_capture.setChecked(
-            bool(self.parent_window.detector.developer_capture_enabled)
-        )
-        self.chk_developer_capture.toggled.connect(self.on_developer_capture_toggled)
-        lay.addWidget(self.chk_developer_capture)
-
-        capture_controls = QHBoxLayout()
-        self.btn_open_capture_folder = QPushButton("캡처 폴더 열기")
-        self.btn_open_capture_folder.clicked.connect(self.open_developer_capture_folder)
-        capture_controls.addWidget(self.btn_open_capture_folder)
-        capture_controls.addStretch()
-        lay.addLayout(capture_controls)
-
-        self.lbl_developer_capture_status = QLabel(
-            "영역·쿨타임·트리거 키를 설정한 뒤 게임에서 해당 키를 누르면 "
-            "<스킬명>_30s.png 형식으로 저장됩니다."
-        )
-        self.lbl_developer_capture_status.setWordWrap(True)
-        self.lbl_developer_capture_status.setStyleSheet(
+        manual_notice.setWordWrap(True)
+        manual_notice.setStyleSheet(
             "font-size: 10px; color: rgba(255,255,255,0.55);"
         )
-        lay.addWidget(self.lbl_developer_capture_status)
-        self.parent_window.detector.developer_capture_status.connect(
-            self.on_developer_capture_status
-        )
+        lay.addWidget(manual_notice)
 
     def setup_ocr_tab(self, tab):
         lay = QVBoxLayout(tab)
@@ -3085,7 +3056,7 @@ class ResizableContainer(QFrame):
 class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('펭구 줌인 Pro v2.45')
+        self.setWindowTitle('펭구 줌인 Pro v2.46')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
@@ -3106,7 +3077,6 @@ class MagnifierWindow(QMainWindow):
         self.detector = cooldown_detector.CooldownDetector()
         self.detector.device_ratio = QApplication.primaryScreen().devicePixelRatio()
         self.detector.state_changed.connect(self.on_skill_state_changed)
-        self.detector.cooldown_observed.connect(self.on_cooldown_observed)
         self.detector.start_detection(50)  # Scan every 50ms (runs inside background QThread)
         
         # Network objects
@@ -3229,11 +3199,7 @@ class MagnifierWindow(QMainWindow):
 
     def load_settings(self):
         config_path = self.get_config_path()
-        # Valid developer captures are converted into a dedicated OCR profile
-        # before persisted slots are restored, so 0-second automatic mode can
-        # use the newly collected digits immediately after app startup.
-        self.detector.import_developer_captures()
-        
+
         # Default fallbacks
         self.zoom_factor = 2.0
         self.opacity_value = 100
@@ -3271,8 +3237,10 @@ class MagnifierWindow(QMainWindow):
                     self.hide_ui_on_transparent = data.get('hide_ui_on_transparent', False)
                     self.client_id = data.get('client_id', None)
                     self.player_class = data.get('player_class', "홀리나이트")
-                    self.developer_capture_mode = bool(data.get('developer_capture_mode', False))
-                    self.detector.developer_capture_enabled = self.developer_capture_mode
+                    # Cooldown OCR/developer capture was retired in v2.46.
+                    # Ignore legacy flags so old configs migrate to manual mode.
+                    self.developer_capture_mode = False
+                    self.detector.developer_capture_enabled = False
                     
                     # Restore party panel position and size
                     party_pos = data.get('party_panel_pos', None)
@@ -3356,11 +3324,7 @@ class MagnifierWindow(QMainWindow):
                         threshold = s_info.get("threshold", 0.85)
                         cooldown_duration = s_info.get("cooldown_duration", 0)
                         trigger_key = s_info.get("trigger_key", None)
-                        ocr_mode = s_info.get("ocr_mode", "shadow")
-                        ocr_profile_id = s_info.get("ocr_profile_id", cooldown_detector.DEFAULT_PROFILE_ID)
-                        digit_roi = s_info.get("digit_roi", list(cooldown_detector.DEFAULT_DIGIT_ROI))
                         slot_device_ratio = s_info.get("device_ratio", self.detector.device_ratio)
-                        ocr_save_diagnostics = s_info.get("ocr_save_diagnostics", False)
                         rect = QRect(rect_val[0], rect_val[1], rect_val[2], rect_val[3]) if rect_val else None
                         
                         template_img = None
@@ -3381,29 +3345,8 @@ class MagnifierWindow(QMainWindow):
                         if slot:
                             slot.trigger_key = trigger_key
                             slot.device_ratio = slot_device_ratio
-                            if (
-                                ocr_mode == "primary"
-                                and self.detector.capture_import_result.get("ok")
-                                and (
-                                    ocr_profile_id in (
-                                        cooldown_detector.DEFAULT_PROFILE_ID,
-                                        cooldown_detector.CAPTURE_PROFILE_ID,
-                                    )
-                                    or (
-                                        ocr_profile_id.startswith(cooldown_detector.CAPTURE_PROFILE_PREFIX)
-                                        and ocr_profile_id not in self.detector.ocr_engine.available_profiles()
-                                    )
-                                )
-                            ):
-                                ocr_profile_id = self.detector.best_profile_for_slot(slot)
-                            self.detector.configure_ocr(
-                                name,
-                                mode=ocr_mode,
-                                profile_id=ocr_profile_id,
-                                digit_roi=digit_roi,
-                                device_ratio=slot_device_ratio,
-                                save_diagnostics=ocr_save_diagnostics,
-                            )
+                            slot.ocr_mode = "off"
+                            slot.ocr_enabled = False
                     if not self.client_id:
                         import uuid
                         self.client_id = str(uuid.uuid4())
@@ -3431,11 +3374,7 @@ class MagnifierWindow(QMainWindow):
                     "threshold": slot.threshold,
                     "cooldown_duration": slot.cooldown_duration,
                     "trigger_key": getattr(slot, 'trigger_key', None),
-                    "ocr_mode": getattr(slot, 'ocr_mode', "shadow"),
-                    "ocr_profile_id": getattr(slot, 'ocr_profile_id', cooldown_detector.DEFAULT_PROFILE_ID),
-                    "digit_roi": list(getattr(slot, 'digit_roi', cooldown_detector.DEFAULT_DIGIT_ROI)),
-                    "device_ratio": getattr(slot, 'device_ratio', None) or self.detector.device_ratio,
-                    "ocr_save_diagnostics": bool(getattr(slot, 'ocr_save_diagnostics', False))
+                    "device_ratio": getattr(slot, 'device_ratio', None) or self.detector.device_ratio
                 })
                 
                 # Write CV2 templates to file with non-ascii Windows compatibility using numpy tofile
@@ -3496,7 +3435,6 @@ class MagnifierWindow(QMainWindow):
                 'hide_ui_on_transparent': self.hide_ui_on_transparent,
                 'client_id': self.client_id,
                 'player_class': getattr(self, 'player_class', "홀리나이트"),
-                'developer_capture_mode': bool(self.detector.developer_capture_enabled),
                 'skills': skills_data,
                 'party_panel_pos': party_pos,
                 'party_panel_size': party_size,
@@ -3828,12 +3766,7 @@ class MagnifierWindow(QMainWindow):
             self.detector.add_slot(self.cooldown_capture_name, rect, threshold=0.85, template_img=captured_gray)
             screen = QApplication.screenAt(QPoint(x + w // 2, y + h // 2)) or QApplication.primaryScreen()
             ratio = screen.devicePixelRatio()
-            best_profile = self.detector.ocr_engine.best_profile_id(int(w * ratio), int(h * ratio))
-            self.detector.configure_ocr(
-                self.cooldown_capture_name,
-                profile_id=best_profile,
-                device_ratio=ratio,
-            )
+            self.detector.slots[self.cooldown_capture_name].device_ratio = ratio
             
             # Auto-save changes immediately to preserve skill slots template images
             self.save_settings()
@@ -3852,15 +3785,6 @@ class MagnifierWindow(QMainWindow):
             if slot:
                 duration = self.detector.get_remaining_seconds(name) if not is_ready else 0
                 self.client.send_update(name, is_ready, duration)
-
-    def on_cooldown_observed(self, name, seconds, confidence):
-        """Push accepted OCR seconds immediately; manual duration may be zero."""
-        if not self.client_running or not self.client:
-            return
-        slot = self.detector.slots.get(name)
-        if slot and slot.ocr_mode == "primary" and not slot.is_ready:
-            duration = self.detector.get_remaining_seconds(name)
-            self.client.send_update(name, False, duration or int(seconds))
 
     def broadcast_skill_states(self):
         # Periodically send all registered skill states to keep party server alive and sync initial states

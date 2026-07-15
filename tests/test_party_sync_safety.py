@@ -12,7 +12,6 @@ import numpy as np
 from PyQt6.QtWidgets import QApplication
 
 from cooldown_detector import CooldownDetector
-from cooldown_ocr import OcrObservation
 from magnifier import MagnifierWindow, PartyPanel
 
 
@@ -55,24 +54,35 @@ class PartySyncSafetyTests(unittest.TestCase):
         self.assertEqual(widgets["status_text_lbl"].text(), "Cooldown")
         panel.close()
 
-    def test_primary_ocr_seconds_send_when_manual_duration_is_zero(self):
+    def test_manual_remaining_seconds_are_sent_on_skill_state_change(self):
         sent = []
         client = SimpleNamespace(
             send_update=lambda name, ready, duration: sent.append((name, ready, duration))
         )
-        slot = SimpleNamespace(ocr_mode="primary", is_ready=False, cooldown_duration=0)
+        slot = SimpleNamespace(is_ready=False, cooldown_duration=30)
         fake_window = SimpleNamespace(
             client_running=True,
             client=client,
             detector=SimpleNamespace(
                 slots={"skill": slot},
-                get_remaining_seconds=lambda name: 0,
+                get_remaining_seconds=lambda name: 12,
             ),
         )
 
-        MagnifierWindow.on_cooldown_observed(fake_window, "skill", 12, 0.99)
+        MagnifierWindow.on_skill_state_changed(fake_window, "skill", False, 0.5)
 
         self.assertEqual(sent, [("skill", False, 12)])
+
+    def test_legacy_ocr_configuration_cannot_enable_automatic_seconds(self):
+        detector = CooldownDetector()
+        detector.add_slot("skill", (0, 0, 10, 10), cooldown_duration=30)
+
+        detector.configure_ocr("skill", mode="primary", save_diagnostics=True)
+
+        slot = detector.slots["skill"]
+        self.assertEqual(slot.ocr_mode, "off")
+        self.assertFalse(slot.ocr_enabled)
+        self.assertFalse(slot.ocr_save_diagnostics)
 
     def test_elapsed_countdown_does_not_promote_ready(self):
         panel = PartyPanel()
@@ -189,16 +199,11 @@ class PartySyncSafetyTests(unittest.TestCase):
         self.assertNotIn("bad", panel.widgets["player"]["skill_widgets"])
         panel.close()
 
-    def test_template_mismatch_is_cooldown_even_when_ocr_is_unknown(self):
+    def test_template_mismatch_is_cooldown_in_manual_mode(self):
         detector = CooldownDetector()
-        detector.ocr_engine.logger.enabled = False
         template = np.zeros((10, 10, 3), dtype=np.uint8)
         template[2:8, 2:8] = 255
         detector.add_slot("skill", (0, 0, 10, 10), template_img=template)
-        detector.configure_ocr("skill", mode="primary")
-        detector.ocr_engine.recognize = lambda *args, **kwargs: OcrObservation(
-            None, 0.0, False, "suffix_not_found"
-        )
         capture = _FakeScreenCapture(np.zeros((10, 10, 4), dtype=np.uint8))
 
         for _ in range(4):
@@ -265,9 +270,8 @@ class PartySyncSafetyTests(unittest.TestCase):
         detector.scan_all(_FailingScreenCapture())
         self.assertFalse(detector.slots["skill"].is_ready)
 
-    def test_first_mismatch_does_not_clear_new_ocr_or_shadow_timer(self):
+    def test_first_mismatch_does_not_clear_new_manual_timer(self):
         detector = CooldownDetector()
-        detector.ocr_engine.logger.enabled = False
         template = np.zeros((10, 10, 3), dtype=np.uint8)
         template[2:8, 2:8] = 255
         detector.add_slot(
@@ -276,31 +280,22 @@ class PartySyncSafetyTests(unittest.TestCase):
             template_img=template,
             cooldown_duration=30,
         )
-        detector.configure_ocr("skill", mode="primary")
         slot = detector.slots["skill"]
         slot.is_ready = True
         slot._ready_consec_frames = 3
-        detector.ocr_engine.recognize = lambda *args, **kwargs: OcrObservation(
-            30, 0.99, True
-        )
         detector.request_trigger("skill")
         detector._drain_trigger_requests()
 
         detector.scan_all(_FakeScreenCapture(np.zeros((10, 10, 4), dtype=np.uint8)))
 
         self.assertTrue(slot.is_ready)
-        self.assertTrue(slot.ocr_active)
         self.assertGreater(slot.cooldown_start_time, 0.0)
 
-    def test_ocr_failure_cannot_block_skill_template_state(self):
+    def test_manual_mode_preserves_skill_template_state_transitions(self):
         detector = CooldownDetector()
         template = np.zeros((10, 10, 3), dtype=np.uint8)
         template[2:8, 2:8] = 255
         detector.add_slot("skill", (0, 0, 10, 10), template_img=template)
-        detector.configure_ocr("skill", mode="primary")
-        detector.ocr_engine.recognize = lambda *args, **kwargs: (_ for _ in ()).throw(
-            RuntimeError("OCR failed")
-        )
         slot = detector.slots["skill"]
 
         ready_image = np.zeros((10, 10, 4), dtype=np.uint8)
@@ -308,13 +303,11 @@ class PartySyncSafetyTests(unittest.TestCase):
         ready_image[:, :, 3] = 255
         ready_capture = _FakeScreenCapture(ready_image)
         for _ in range(3):
-            slot.ocr_next_scan_at = 0.0
             detector.scan_all(ready_capture)
         self.assertTrue(slot.is_ready)
 
         mismatch_capture = _FakeScreenCapture(np.zeros((10, 10, 4), dtype=np.uint8))
         for _ in range(3):
-            slot.ocr_next_scan_at = 0.0
             detector.scan_all(mismatch_capture)
         self.assertFalse(slot.is_ready)
 
