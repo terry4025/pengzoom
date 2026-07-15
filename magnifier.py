@@ -840,6 +840,10 @@ class PartyPanel(QWidget):
                         pixmap.fill(Qt.GlobalColor.transparent)
                         painter = QPainter(pixmap)
                         renderer.render(painter)
+                        # Official class SVGs use mixed dark/light fills.  Keep the
+                        # vector alpha mask but normalize every emblem to HUD white.
+                        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+                        painter.fillRect(pixmap.rect(), QColor("#f5f5f7"))
                         painter.end()
                         lbl.setPixmap(pixmap)
                         return
