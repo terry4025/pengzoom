@@ -422,7 +422,7 @@ class CharacterProfileLookup(QObject):
 
     def lookup(self, server_url, character_name):
         character_name = (character_name or "").strip()
-        server_url = (server_url or "").rstrip("/")
+        server_url = self.normalize_server_url(server_url)
         with self._request_lock:
             self._request_id += 1
             request_id = self._request_id
@@ -434,6 +434,18 @@ class CharacterProfileLookup(QObject):
         )
         worker.start()
         return request_id
+
+    @staticmethod
+    def normalize_server_url(server_url):
+        server_url = (server_url or "").strip().rstrip("/")
+        if server_url.startswith("wss://"):
+            return "https://" + server_url[6:]
+        if server_url.startswith("ws://"):
+            return "http://" + server_url[5:]
+        if "://" not in server_url:
+            scheme = "http://" if server_url.startswith(("127.0.0.1", "localhost")) else "https://"
+            return scheme + server_url
+        return server_url
 
     def _lookup_worker(self, request_id, server_url, character_name):
         try:

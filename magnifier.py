@@ -2603,7 +2603,7 @@ class ResizableContainer(QFrame):
 class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('펭구 줌인 Pro v2.39')
+        self.setWindowTitle('펭구 줌인 Pro v2.40')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
@@ -2769,6 +2769,8 @@ class MagnifierWindow(QMainWindow):
                     
                     self.player_name = data.get('player_name', "플레이어")
                     self.server_url = data.get('server_url', "https://pengzoom-pro-relay.onrender.com")
+                    if "://" not in self.server_url:
+                        self.server_url = "https://" + self.server_url.lstrip("/")
                     if "127.0.0.1" in self.server_url or "localhost" in self.server_url or self.server_url.startswith("http://"):
                         self.server_url = "https://pengzoom-pro-relay.onrender.com"
                     if ":9090" in self.server_url:
