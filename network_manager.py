@@ -415,11 +415,13 @@ class CooldownClient(QObject):
     connection_failed = pyqtSignal(str)
     connection_ok = pyqtSignal()       # Emitted on successful connection — used to clear error UI
     
-    def __init__(self, server_url="http://127.0.0.1:19090", player_name="플레이어", room_id="default", parent=None):
+    def __init__(self, server_url="http://127.0.0.1:19090", player_name="플레이어", room_id="default", client_id=None, class_name="홀리나이트", parent=None):
         super().__init__(parent)
         self.server_url = server_url.rstrip("/")
         self.player_name = player_name
         self.room_id = room_id
+        self.client_id = client_id
+        self.class_name = class_name
         
         self.is_running = False
         self.use_fallback = False
@@ -486,7 +488,9 @@ class CooldownClient(QObject):
         join_msg = {
             "action": "join",
             "room_id": self.room_id,
-            "player": self.player_name
+            "player": self.player_name,
+            "client_id": self.client_id,
+            "class_name": self.class_name
         }
         self.ws.sendTextMessage(json.dumps(join_msg))
         
@@ -515,6 +519,8 @@ class CooldownClient(QObject):
                 "action": "update",
                 "room_id": self.room_id,
                 "player": self.player_name,
+                "client_id": self.client_id,
+                "class_name": self.class_name,
                 "skill": skill_name,
                 "is_ready": is_ready,
                 "cooldown_duration": cooldown_duration
@@ -530,6 +536,8 @@ class CooldownClient(QObject):
                 data = json.dumps({
                     "room_id": self.room_id,
                     "player": self.player_name,
+                    "client_id": self.client_id,
+                    "class_name": self.class_name,
                     "skill": skill_name,
                     "is_ready": is_ready,
                     "cooldown_duration": cooldown_duration
@@ -545,7 +553,8 @@ class CooldownClient(QObject):
                     with self.opener.open(req, timeout=2.0) as res:
                         res.read()
                 except Exception as e:
-                    self.connection_failed.emit(f"HTTP 업데이트 실패: {str(e)}")
+                    error_msg = f"HTTP 업데이트 실패: {str(e)}"
+                    QTimer.singleShot(0, lambda msg=error_msg: self.connection_failed.emit(msg))
                     
             threading.Thread(target=_send, daemon=True).start()
             
@@ -617,9 +626,17 @@ class CooldownClient(QObject):
                                     info["timestamp"] = info["timestamp"] + time_offset
                                     
                     self.party_states = states
-                    self.status_updated.emit(self.party_states)
-                    self.connection_ok.emit()
+                    # Marshal signal emissions to main thread via QTimer to prevent crash
+                    QTimer.singleShot(0, lambda: self._emit_poll_results())
             except Exception as e:
-                self.connection_failed.emit(f"상태 가져오기 실패 (HTTP): {str(e)}")
+                error_msg = f"상태 가져오기 실패 (HTTP): {str(e)}"
+                QTimer.singleShot(0, lambda msg=error_msg: self.connection_failed.emit(msg))
                 
         threading.Thread(target=_poll, daemon=True).start()
+
+    def _emit_poll_results(self):
+        try:
+            self.status_updated.emit(self.party_states)
+            self.connection_ok.emit()
+        except Exception:
+            pass

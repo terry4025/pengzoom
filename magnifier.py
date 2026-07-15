@@ -14,9 +14,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout,
                              QHBoxLayout, QWidget, QFrame, QPushButton, QSlider, 
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
                              QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
-                             QCheckBox, QSpinBox)
+                             QCheckBox, QSpinBox, QComboBox)
 from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject, QSize, QPropertyAnimation, QEasingCurve, QEvent
-from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence, QWheelEvent
+from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence, QWheelEvent, QFont, QBrush
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
 from PIL import Image
@@ -40,6 +40,16 @@ except Exception:
 GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
+
+# Additional Lucide Icons
+LUCIDE_LOCK_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-lock"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>"""
+LUCIDE_LOCK_OPEN_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-lock-open"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>"""
+LUCIDE_PALETTE_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-palette"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.92 0 1.63-.77 1.63-1.7 0-.42-.16-.83-.44-1.14l-.3-.33a.43.43 0 0 1-.1-.28c0-.23.18-.42.41-.42H15c5 0 9-4 9-9c0-5.5-4.5-10-10-10Z"/></svg>"""
+LUCIDE_LAYOUT_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-layout"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>"""
+LUCIDE_EYE_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-eye"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>"""
+LUCIDE_SCALE_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-maximize-2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" x2="14" y1="3" y2="10"/><line x1="3" x2="10" y1="21" y2="14"/></svg>"""
+LUCIDE_SLIDERS_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sliders-horizontal"><line x1="4" x2="14" y1="4" y2="4"/><line x1="20" x2="20" y1="4" y2="4"/><line x1="4" x2="6" y1="12" y2="12"/><line x1="12" x2="20" y1="12" y2="12"/><line x1="4" x2="14" y1="20" y2="20"/><line x1="20" x2="20" y1="20" y2="20"/><circle cx="17" cy="4" r="3"/><circle cx="9" cy="12" r="3"/><circle cx="17" cy="20" r="3"/></svg>"""
+LUCIDE_SPARKLES_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sparkles"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>"""
 
 # Lucide Icons SVG Data with precise color mapping and strong stroke widths
 LUCIDE_MINIMIZE_SVG = """
@@ -394,11 +404,195 @@ class InputBridge(QObject):
     toggle_click_through = pyqtSignal()
     toggle_hide = pyqtSignal()
 
-# Floating transparent window displaying party skill statuses
-# Floating transparent window displaying party skill statuses
+# Lost Ark Class Emblems mapping to Stove CDN keys (Korean Only)
+LOST_ARK_CLASSES = {
+    "홀리나이트": "holyknight",
+    "워로드": "warlord",
+    "버서커": "berserker",
+    "디스트로이어": "destroyer",
+    "인파이터": "infighter",
+    "블래스터": "blaster",
+    "스카우터": "scouter",
+    "바드": "bard",
+    "서머너": "summoner",
+    "아르카나": "arcana",
+    "블레이드": "blade",
+    "데모닉": "demonic",
+    "리퍼": "reaper",
+    "소서리스": "magician",
+    "도화가": "specialist",
+    "기상술사": "weather_artist",
+    "슬레이어": "berserker_female",
+    "소울이터": "soul_eater",
+    "브레이커": "infighter_male",
+    "배틀마스터": "elemental_master",
+    "기공사": "force_master",
+    "창술사": "lance_master",
+    "스트라이커": "battle_master_male",
+    "데빌헌터": "devil_hunter",
+    "호크아이": "hawk_eye",
+    "건슬링어": "devil_hunter_female"
+}
+
+CACHE_DIR = os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "scratch", "cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+def get_class_icon(class_name):
+    base_key = LOST_ARK_CLASSES.get(class_name, "holyknight")
+    local_path = os.path.join(CACHE_DIR, f"emblem_{base_key}.png")
+    
+    if not os.path.exists(local_path):
+        url = f"https://cdn-lostark.game.onstove.com/2018/obt/assets/images/common/thumb/emblem_{base_key}.png"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=2.0) as res:
+                with open(local_path, "wb") as f:
+                    f.write(res.read())
+        except Exception:
+            return None
+    return local_path
+
+# Preset Styling Themes for Party Overlay
+THEMES = {
+    "옵시디언 글래스": {
+        "bg": "rgba(18, 18, 23, 0.88)",
+        "border": "1.2px solid rgba(255, 255, 255, 0.08)",
+        "accent": "#0a84ff",        # Premium iOS Royal Blue
+        "accent_secondary": "#8e8e93",
+        "ready": "#30d158",         # Apple Green
+        "cooldown": "#ff9f0a",      # Amber Orange
+        "card_bg": "rgba(255, 255, 255, 0.02)",
+        "card_border": "1px solid rgba(255, 255, 255, 0.03)",
+        "shadow": "rgba(0, 0, 0, 0.45)",
+        "font_color": "#f5f5f7"
+    },
+    "노르딕 라이트": {
+        "bg": "rgba(240, 242, 245, 0.92)",
+        "border": "1.2px solid rgba(0, 0, 0, 0.06)",
+        "accent": "#007aff",        # macOS Blue
+        "accent_secondary": "#8e8e93",
+        "ready": "#34c759",
+        "cooldown": "#ff9500",
+        "card_bg": "rgba(0, 0, 0, 0.01)",
+        "card_border": "1px solid rgba(0, 0, 0, 0.02)",
+        "shadow": "rgba(0, 0, 0, 0.08)",
+        "font_color": "#1d1d1f"
+    },
+    "크림슨 벨벳": {
+        "bg": "rgba(26, 18, 20, 0.94)",
+        "border": "1.2px solid rgba(255, 59, 48, 0.16)",
+        "accent": "#ff3b30",        # Deep Red Accent
+        "accent_secondary": "#aeaeb2",
+        "ready": "#30d158",
+        "cooldown": "#ff453a",
+        "card_bg": "rgba(255, 255, 255, 0.02)",
+        "card_border": "1px solid rgba(255, 255, 255, 0.03)",
+        "shadow": "rgba(255, 59, 48, 0.06)",
+        "font_color": "#f5f5f7"
+    }
+}
+
+class CircularProgress(QWidget):
+    def __init__(self, color_hex="#ff453a", parent=None):
+        super().__init__(parent)
+        self.value = 100.0
+        self.color = QColor(color_hex)
+        self.bg_color = QColor(255, 255, 255, 10)
+        self.text = ""
+        self.flash_val = 0.0
+        self.setFixedSize(28, 28)
+        
+    def setValue(self, val):
+        self.value = float(val)
+        self.update()
+        
+    def setColor(self, color_hex):
+        self.color = QColor(color_hex)
+        self.update()
+        
+    def setText(self, text):
+        self.text = text
+        self.update()
+        
+    def setFlash(self, val):
+        self.flash_val = float(val)
+        self.update()
+        
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        rect = self.rect().adjusted(2, 2, -2, -2)
+        
+        painter.setPen(QPen(self.bg_color, 2))
+        painter.drawEllipse(rect)
+        
+        pen = QPen(self.color, 2.5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        
+        angle = int((self.value / 100.0) * 360 * 16)
+        painter.drawArc(rect, 90 * 16, -angle)
+        
+        if self.text:
+            painter.setPen(QPen(QColor("#ffffff")))
+            font = QFont("Segoe UI", 9, QFont.Weight.Bold)
+            painter.setFont(font)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.text)
+            
+        if self.flash_val > 0.0:
+            flash_color = QColor(255, 255, 255, int(200 * self.flash_val))
+            painter.setBrush(QBrush(flash_color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(self.rect().adjusted(1, 1, -1, -1))
+
+class GlowDot(QWidget):
+    def __init__(self, color_hex="#30d158", parent=None):
+        super().__init__(parent)
+        self.color = QColor(color_hex)
+        self.setFixedSize(14, 14)
+        
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update)
+        self.timer.start(16)
+        
+        self.start_time = time.time()
+        self.speed = 1.0
+        self.intensity = 1.0
+        
+    def setColor(self, color_hex):
+        self.color = QColor(color_hex)
+        self.update()
+        
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        center = self.rect().center()
+        base_rad = 3.0
+        
+        elapsed = time.time() - self.start_time
+        scale = 0.5 + 0.5 * math.sin(elapsed * 2 * math.pi * 0.70 * self.speed)
+        
+        max_glow_radius = 6.5
+        current_glow_radius = base_rad + (max_glow_radius - base_rad) * scale
+        
+        for r in range(int(current_glow_radius) + 1):
+            if r <= base_rad:
+                continue
+            alpha = int((1.0 - (r - base_rad) / (max_glow_radius - base_rad)) * 45 * scale * self.intensity)
+            c = QColor(self.color.red(), self.color.green(), self.color.blue(), max(0, min(255, alpha)))
+            painter.setBrush(QBrush(c))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(center, r, r)
+            
+        painter.setBrush(QBrush(self.color))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(center, int(base_rad), int(base_rad))
+
 class PartyPanel(QWidget):
     def __init__(self, parent=None):
-        super().__init__()  # 부모 전달 안 함 → 독립 윈도우 (메인 최소화 시 같이 안 숨겨짐)
+        super().__init__()
         self.parent_window = parent
         self.panel_click_through = False
         self.setWindowTitle("파티원 쿨타임 현황")
@@ -406,87 +600,100 @@ class PartyPanel(QWidget):
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMouseTracking(True)
         
-        self.setStyleSheet("""
-            #Container {
-                background-color: rgba(20, 20, 22, 0.90);
-                border: 1.5px solid rgba(255, 255, 255, 0.12);
-                border-radius: 14px;
-            }
-            QLabel {
-                color: #ffffff;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            }
-            QLabel#Title {
-                font-size: 14px;
-                font-weight: 700;
-                color: #0a84ff;
-            }
-            QFrame.PlayerCard {
-                background-color: rgba(255, 255, 255, 0.03);
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 10px;
-                margin-top: 2px;
-                margin-bottom: 2px;
-            }
-            QFrame.SkillBadge {
-                border-radius: 6px;
-                padding: 4px 8px;
-            }
-        """)
+        self.theme_name = "옵시디언 글래스"
+        self.layout_mode = "세로형"
+        self.display_mode = "상세 정보"
+        self.ui_scale = 1.0
+        self.speed = 1.0
+        self.intensity = 1.0
+        self.player_classes = {}
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         
-        container = QFrame()
-        container.setObjectName("Container")
-        container.setMouseTracking(True)
-        container.installEventFilter(self)
-        self.container_layout = QVBoxLayout(container)
+        self.container = QFrame()
+        self.container.setObjectName("Container")
+        self.container.setMouseTracking(True)
+        self.container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.container_layout = QVBoxLayout(self.container)
         self.container_layout.setContentsMargins(14, 14, 14, 14)
         self.container_layout.setSpacing(10)
-        
-        header_lay = QHBoxLayout()
-        header_lay.setSpacing(6)
-        
-        header_icon = QLabel()
-        header_icon.setFixedSize(18, 18)
-        header_icon.setStyleSheet("border: none; background: transparent;")
-        header_icon.setPixmap(get_svg_pixmap(LUCIDE_HOST_SVG, 18))
-        
-        title = QLabel("파티 스킬 모니터")
-        title.setObjectName("Title")
-        
-        header_lay.addWidget(header_icon)
-        header_lay.addWidget(title)
-        header_lay.addStretch()
-        self.container_layout.addLayout(header_lay)
         
         self.list_layout = QVBoxLayout()
         self.list_layout.setSpacing(8)
         self.container_layout.addLayout(self.list_layout)
         
-        layout.addWidget(container)
+        layout.addWidget(self.container)
         self.resize(240, 320)
-        self.old_pos = None
-        self.widgets = {}
         
-        # Sizing and transparency configuration
+        self.widgets = {}
         self.panel_opacity = 90
         self.setWindowOpacity(self.panel_opacity / 100.0)
-        self.setMouseTracking(True)
+        
         self.resize_dir = None
         self.drag_position = None
+        self.resize_border = 15
         
-        # Real-time tick timer for countdown displays
-        from PyQt6.QtCore import QTimer
+        # 60fps updates (16ms)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick_timers)
-        self.timer.start(100)  # 100ms precision
-
-
+        self.timer.start(16)
+        
+        self.update_theme_styles()
+        self.apply_theme()
+        
+    def update_theme_styles(self):
+        theme = THEMES[self.theme_name]
+        self.container_style_normal = f"""
+            #Container {{
+                background-color: {theme['bg']};
+                border: 1.2px solid rgba(255, 255, 255, 0.02);
+                border-radius: 16px;
+            }}
+            QLabel {{ color: {theme['font_color']}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }}
+            QFrame.PlayerCard {{ background-color: {theme['card_bg']}; border: {theme['card_border']}; border-radius: 12px; }}
+            QFrame.SkillBadge {{ background-color: rgba(255, 255, 255, 0.01); border: 1px solid rgba(255, 255, 255, 0.02); border-radius: 8px; }}
+        """
+        self.container_style_hover = f"""
+            #Container {{
+                background-color: {theme['bg']};
+                border: {theme['border']};
+                border-radius: 16px;
+            }}
+            QLabel {{ color: {theme['font_color']}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }}
+            QFrame.PlayerCard {{ background-color: {theme['card_bg']}; border: {theme['card_border']}; border-radius: 12px; }}
+            QFrame.SkillBadge {{ background-color: rgba(255, 255, 255, 0.01); border: 1px solid rgba(255, 255, 255, 0.02); border-radius: 8px; }}
+        """
+        
+    def apply_theme(self):
+        self.update_theme_styles()
+        self.container.setStyleSheet(self.container_style_normal)
+        theme = THEMES[self.theme_name]
+        
+        for player, p_info in self.widgets.items():
+            for skill, s_widgets in p_info["skill_widgets"].items():
+                s_widgets["glow"].setColor(theme['ready'])
+                s_widgets["glow"].speed = self.speed
+                s_widgets["glow"].intensity = self.intensity
+                s_widgets["progress"].setColor(theme['cooldown'])
+                
+    def rebuild_cards(self):
+        for i in reversed(range(self.list_layout.count())):
+            item = self.list_layout.itemAt(i)
+            if item and item.widget():
+                item.widget().setParent(None)
+        self.widgets.clear()
+        
+        if self.parent_window and self.parent_window.client:
+            self.update_states(self.parent_window.client.party_states)
+            
     def update_states(self, party_states):
+        import urllib.request
         current_players = set(party_states.keys())
+        
+        # Remove old players
         for p in list(self.widgets.keys()):
             if p not in current_players:
                 self.widgets[p]["widget"].deleteLater()
@@ -496,7 +703,7 @@ class PartyPanel(QWidget):
             if player not in self.widgets:
                 player_widget = QFrame()
                 player_widget.setProperty("class", "PlayerCard")
-                player_widget.setObjectName("PlayerCardWidget")
+                player_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                 
                 p_lay = QVBoxLayout(player_widget)
                 p_lay.setContentsMargins(10, 8, 10, 8)
@@ -505,38 +712,65 @@ class PartyPanel(QWidget):
                 name_row = QHBoxLayout()
                 name_row.setSpacing(6)
                 
-                u_icon = QLabel()
-                u_icon.setFixedSize(14, 14)
-                u_icon.setStyleSheet("border: none; background: transparent;")
-                u_icon.setPixmap(get_svg_pixmap(LUCIDE_USER_SVG, 14))
+                icon_lbl = QLabel()
+                icon_lbl.setFixedSize(18, 18)
+                icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                 
                 name_lbl = QLabel(player)
-                name_lbl.setStyleSheet("font-weight: 700; color: #ffffff; font-size: 13px;")
+                name_lbl.setStyleSheet(f"font-size: {int(12*self.ui_scale)}px; font-weight: 700; opacity: 0.85;")
+                name_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                 
-                name_row.addWidget(u_icon)
+                name_row.addWidget(icon_lbl)
                 name_row.addWidget(name_lbl)
                 name_row.addStretch()
                 p_lay.addLayout(name_row)
                 
-                skills_lay = QVBoxLayout()
-                skills_lay.setSpacing(4)
-                p_lay.addLayout(skills_lay)
+                skills_widget = QWidget()
+                skills_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                if self.layout_mode == "가로형":
+                    skills_lay = QHBoxLayout(skills_widget)
+                    skills_lay.setContentsMargins(0, 0, 0, 0)
+                    skills_lay.setSpacing(int(8*self.ui_scale))
+                else:
+                    skills_lay = QVBoxLayout(skills_widget)
+                    skills_lay.setContentsMargins(0, 0, 0, 0)
+                    skills_lay.setSpacing(int(4*self.ui_scale))
                 
+                p_lay.addWidget(skills_widget)
                 self.list_layout.addWidget(player_widget)
+                
                 self.widgets[player] = {
                     "widget": player_widget,
                     "skills_layout": skills_lay,
+                    "skills_widget_container": skills_widget,
+                    "icon_lbl": icon_lbl,
+                    "name_lbl": name_lbl,
                     "skill_widgets": {}
                 }
                 
             p_data = self.widgets[player]
             
+            # Fetch emblem from the server or local mapping
+            class_name = skills.get("_class", self.player_classes.get(player, "홀리나이트")) if isinstance(skills, dict) else "홀리나이트"
+            self.player_classes[player] = class_name
+            icon_path = get_class_icon(class_name)
+            if icon_path and os.path.exists(icon_path) and os.path.getsize(icon_path) > 0:
+                pixmap = QPixmap(icon_path)
+                if not pixmap.isNull():
+                    p_data["icon_lbl"].setPixmap(pixmap.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                else:
+                    p_data["icon_lbl"].setStyleSheet("background-color: rgba(255, 255, 255, 0.05); border-radius: 9px;")
+            else:
+                p_data["icon_lbl"].setStyleSheet("background-color: rgba(255, 255, 255, 0.05); border-radius: 9px;")
+                
             for s in list(p_data["skill_widgets"].keys()):
                 if s not in skills:
                     p_data["skill_widgets"][s]["badge"].deleteLater()
                     del p_data["skill_widgets"][s]
                     
-            for skill, s_info in skills.items():
+            for skill, s_info in (skills.items() if isinstance(skills, dict) else {}):
+                if skill.startswith('_'):
+                    continue
                 is_ready = s_info.get("is_ready", True)
                 cooldown_duration = s_info.get("cooldown_duration", 0)
                 timestamp = s_info.get("timestamp", 0.0)
@@ -544,100 +778,151 @@ class PartyPanel(QWidget):
                 if skill not in p_data["skill_widgets"]:
                     badge = QFrame()
                     badge.setProperty("class", "SkillBadge")
+                    badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                     b_lay = QHBoxLayout(badge)
-                    b_lay.setContentsMargins(6, 4, 6, 4)
-                    b_lay.setSpacing(6)
+                    b_lay.setContentsMargins(int(8*self.ui_scale), int(5*self.ui_scale), int(8*self.ui_scale), int(5*self.ui_scale))
+                    b_lay.setSpacing(int(8*self.ui_scale))
                     
-                    status_icon = QLabel()
-                    status_icon.setFixedSize(12, 12)
-                    status_icon.setStyleSheet("border: none; background: transparent;")
+                    indicator_container = QWidget()
+                    indicator_container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                    ind_lay = QHBoxLayout(indicator_container)
+                    ind_lay.setContentsMargins(0, 0, 0, 0)
+                    ind_lay.setSpacing(0)
                     
-                    skill_lbl = QLabel(skill)
-                    skill_lbl.setStyleSheet("font-size: 12px; font-weight: 500; color: #ffffff;")
+                    theme = THEMES[self.theme_name]
+                    glow = GlowDot(theme["ready"])
+                    glow.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                    glow.speed = self.speed
+                    glow.intensity = self.intensity
                     
-                    status_text_lbl = QLabel()
-                    status_text_lbl.setStyleSheet("font-size: 11px; font-weight: 600;")
+                    progress = CircularProgress(theme["cooldown"])
+                    progress.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                     
-                    b_lay.addWidget(status_icon)
-                    b_lay.addWidget(skill_lbl)
+                    ind_lay.addWidget(glow)
+                    ind_lay.addWidget(progress)
+                    b_lay.addWidget(indicator_container)
+                    
+                    text_container = QWidget()
+                    text_container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                    t_lay = QVBoxLayout(text_container)
+                    t_lay.setContentsMargins(0, 0, 0, 0)
+                    t_lay.setSpacing(0)
+                    
+                    skill_name_lbl = QLabel(skill)
+                    skill_name_lbl.setStyleSheet(f"font-size: {int(11*self.ui_scale)}px; font-weight: 600;")
+                    skill_name_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                    
+                    status_lbl = QLabel("Ready")
+                    status_lbl.setStyleSheet(f"font-size: {int(9*self.ui_scale)}px; font-weight: bold; opacity: 0.6;")
+                    status_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                    
+                    t_lay.addWidget(skill_name_lbl)
+                    t_lay.addWidget(status_lbl)
+                    b_lay.addWidget(text_container)
                     b_lay.addStretch()
-                    b_lay.addWidget(status_text_lbl)
                     
                     p_data["skills_layout"].addWidget(badge)
                     p_data["skill_widgets"][skill] = {
                         "badge": badge,
-                        "status_icon": status_icon,
-                        "status_text_lbl": status_text_lbl,
+                        "glow": glow,
+                        "progress": progress,
+                        "skill_name_lbl": skill_name_lbl,
+                        "status_text_lbl": status_lbl,
+                        "text_container": text_container,
                         "is_ready": is_ready,
                         "cooldown_duration": cooldown_duration,
                         "timestamp": timestamp,
-                        "ui_ready_state": None
+                        "flash_val": 0.0,
+                        "was_ready": is_ready
                     }
-                
+                else:
+                    s_widgets = p_data["skill_widgets"][skill]
+                    s_widgets["is_ready"] = is_ready
+                    s_widgets["cooldown_duration"] = cooldown_duration
+                    s_widgets["timestamp"] = timestamp
+                    
                 s_widgets = p_data["skill_widgets"][skill]
-                s_widgets["is_ready"] = is_ready
-                s_widgets["cooldown_duration"] = cooldown_duration
-                s_widgets["timestamp"] = timestamp
+                if self.display_mode == "아이콘만":
+                    s_widgets["text_container"].hide()
+                    s_widgets["badge"].setStyleSheet("QFrame.SkillBadge { border: none; background: transparent; }")
+                else:
+                    s_widgets["text_container"].show()
 
     def tick_timers(self):
-        import time
-        import math
         current_time = time.time()
+        theme = THEMES[self.theme_name]
         
         for player, p_data in list(self.widgets.items()):
             for skill, s_widgets in list(p_data["skill_widgets"].items()):
                 is_ready = s_widgets["is_ready"]
-                cooldown_duration = s_widgets["cooldown_duration"]
+                cd_duration = s_widgets["cooldown_duration"]
                 timestamp = s_widgets["timestamp"]
                 
-                remaining = 0
-                if not is_ready and cooldown_duration > 0:
+                remaining = 0.0
+                if not is_ready and cd_duration > 0:
                     elapsed = current_time - timestamp
-                    remaining = max(0.0, cooldown_duration - elapsed)
-                
-                visually_ready = is_ready or (cooldown_duration > 0 and remaining <= 0)
-                
-                if visually_ready:
-                    if s_widgets["ui_ready_state"] != True:
-                        s_widgets["ui_ready_state"] = True
-                        s_widgets["badge"].setStyleSheet("""
-                            QFrame.SkillBadge {
-                                background-color: rgba(48, 209, 88, 0.08);
-                                border: 1px solid rgba(48, 209, 88, 0.25);
-                            }
-                        """)
-                        s_widgets["status_icon"].setPixmap(get_svg_pixmap(LUCIDE_CHECK_SVG, 12))
-                        s_widgets["status_text_lbl"].setText("Ready")
-                        s_widgets["status_text_lbl"].setStyleSheet("color: #30d158;")
+                    remaining = max(0.0, cd_duration - elapsed)
+                    if remaining <= 0.0:
+                        is_ready = True
+                        
+                if is_ready:
+                    if not s_widgets.get("was_ready", True):
+                        s_widgets["flash_val"] = 1.0
+                    s_widgets["was_ready"] = True
                 else:
-                    if s_widgets["ui_ready_state"] != False:
-                        s_widgets["ui_ready_state"] = False
-                        s_widgets["badge"].setStyleSheet("""
-                            QFrame.SkillBadge {
-                                background-color: rgba(255, 69, 58, 0.08);
-                                border: 1px solid rgba(255, 69, 58, 0.25);
-                            }
-                        """)
-                        s_widgets["status_icon"].setPixmap(get_svg_pixmap(LUCIDE_CLOCK_SVG, 12))
-                        s_widgets["status_text_lbl"].setStyleSheet("color: #ff453a;")
+                    s_widgets["was_ready"] = False
                     
-                    if cooldown_duration > 0:
+                flash_val = s_widgets.get("flash_val", 0.0)
+                if flash_val > 0.0:
+                    flash_val = max(0.0, flash_val - 0.04)
+                    s_widgets["flash_val"] = flash_val
+                    
+                s_widgets["progress"].setFlash(flash_val)
+                
+                if is_ready:
+                    s_widgets["glow"].show()
+                    s_widgets["progress"].hide()
+                    s_widgets["status_text_lbl"].setText("Ready")
+                    s_widgets["status_text_lbl"].setStyleSheet(f"color: {theme['ready']}; font-size: {int(9*self.ui_scale)}px; font-weight: bold;")
+                    
+                    flash_alpha = int(12 + 60 * flash_val)
+                    border_alpha = int(36 + 180 * flash_val)
+                    s_widgets["badge"].setStyleSheet(f"QFrame.SkillBadge {{ background-color: rgba(48, 209, 88, {flash_alpha/255.0:.2f}); border: 1.2px solid rgba(48, 209, 88, {border_alpha/255.0:.2f}); }}")
+                else:
+                    s_widgets["glow"].hide()
+                    s_widgets["progress"].show()
+                    
+                    pct = (remaining / cd_duration) * 100.0
+                    s_widgets["progress"].setValue(pct)
+                    
+                    if remaining >= 1.0:
+                        s_widgets["progress"].setText(f"{int(math.ceil(remaining))}")
                         s_widgets["status_text_lbl"].setText(f"{int(math.ceil(remaining))}s")
                     else:
-                        s_widgets["status_text_lbl"].setText("Cooldown")
+                        s_widgets["progress"].setText(f"{remaining:.1f}")
+                        s_widgets["status_text_lbl"].setText(f"{remaining:.1f}s")
+                        
+                    s_widgets["status_text_lbl"].setStyleSheet(f"color: {theme['cooldown']}; font-size: {int(9*self.ui_scale)}px; font-weight: bold;")
+                    s_widgets["badge"].setStyleSheet(f"QFrame.SkillBadge {{ background-color: rgba(255, 69, 58, 0.03); border: 1.2px solid rgba(255, 69, 58, 0.12); }}")
+
+    def enterEvent(self, event):
+        if not self.panel_click_through:
+            self.container.setStyleSheet(self.container_style_hover)
+        super().enterEvent(event)
+        
+    def leaveEvent(self, event):
+        if not self.panel_click_through:
+            self.container.setStyleSheet(self.container_style_normal)
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event):
-        if self.panel_click_through:
-            return
-            
+        if self.panel_click_through: return
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
             rect = self.rect()
-            border = 15
             
-            # Check edge areas for resizing
-            is_right = pos.x() >= rect.width() - border
-            is_bottom = pos.y() >= rect.height() - border
+            is_right = pos.x() >= rect.width() - self.resize_border
+            is_bottom = pos.y() >= rect.height() - self.resize_border
             
             if is_right and is_bottom:
                 self.resize_dir = "BottomRight"
@@ -648,20 +933,15 @@ class PartyPanel(QWidget):
             else:
                 self.resize_dir = None
                 self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            
+                
     def mouseMoveEvent(self, event):
-        if self.panel_click_through:
-            return
-            
+        if self.panel_click_through: return
         pos = event.position().toPoint()
         rect = self.rect()
-        border = 15
         
-        # Cursor styling when hovering over borders (Only when not clicking)
         if event.buttons() == Qt.MouseButton.NoButton:
-            is_right = pos.x() >= rect.width() - border
-            is_bottom = pos.y() >= rect.height() - border
-            
+            is_right = pos.x() >= rect.width() - self.resize_border
+            is_bottom = pos.y() >= rect.height() - self.resize_border
             if is_right and is_bottom:
                 self.setCursor(Qt.CursorShape.SizeBDiagCursor)
             elif is_right:
@@ -670,66 +950,414 @@ class PartyPanel(QWidget):
                 self.setCursor(Qt.CursorShape.SizeVerCursor)
             else:
                 self.setCursor(Qt.CursorShape.ArrowCursor)
-                
-        # Perform resize or move operations
         elif event.buttons() == Qt.MouseButton.LeftButton:
             global_pos = event.globalPosition().toPoint()
             if self.resize_dir == "BottomRight":
-                w = max(150, global_pos.x() - self.x())
-                h = max(100, global_pos.y() - self.y())
-                self.resize(w, h)
+                self.resize(max(150, global_pos.x() - self.x()), max(100, global_pos.y() - self.y()))
             elif self.resize_dir == "Right":
-                w = max(150, global_pos.x() - self.x())
-                self.resize(w, self.height())
+                self.resize(max(150, global_pos.x() - self.x()), self.height())
             elif self.resize_dir == "Bottom":
-                h = max(100, global_pos.y() - self.y())
-                self.resize(self.width(), h)
+                self.resize(self.width(), max(100, global_pos.y() - self.y()))
             elif self.drag_position is not None:
                 self.move(global_pos - self.drag_position)
-            
+                
     def mouseReleaseEvent(self, event):
-        self.old_pos = None
         self.resize_dir = None
         self.drag_position = None
         self.setCursor(Qt.CursorShape.ArrowCursor)
         if self.parent_window:
             self.parent_window.save_settings()
 
-    def eventFilter(self, obj, event):
-        if not self.panel_click_through and event.type() == QEvent.Type.MouseMove:
-            # Map global position of mouse move inside children to parent's local geometry
-            local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
-            rect = self.rect()
-            border = 15
-            
-            is_right = local_pos.x() >= rect.width() - border
-            is_bottom = local_pos.y() >= rect.height() - border
-            
-            if is_right and is_bottom:
-                self.setCursor(Qt.CursorShape.SizeBDiagCursor)
-            elif is_right:
-                self.setCursor(Qt.CursorShape.SizeHorCursor)
-            elif is_bottom:
-                self.setCursor(Qt.CursorShape.SizeVerCursor)
+    def set_click_through(self, enabled):
+        self.panel_click_through = enabled
+        hwnd = int(self.winId())
+        try:
+            import ctypes
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            if enabled:
+                style |= WS_EX_TRANSPARENT
             else:
-                self.setCursor(Qt.CursorShape.ArrowCursor)
-        return super().eventFilter(obj, event)
-            
+                style &= ~WS_EX_TRANSPARENT
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+            ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0027)
+        except Exception:
+            # Fallback
+            if enabled:
+                self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowTransparentForInput)
+            else:
+                self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowTransparentForInput)
+            self.show()
+
     def closeEvent(self, event):
         if self.parent_window:
             self.parent_window.save_settings()
         super().closeEvent(event)
 
-    def set_click_through(self, enabled):
-        self.panel_click_through = enabled
-        hwnd = int(self.winId())
-        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        if enabled:
-            new_style = style | WS_EX_TRANSPARENT | WS_EX_LAYERED
+
+class PartyOverlaySettingsModal(QDialog):
+    def __init__(self, parent_window, parent_dialog=None):
+        super().__init__(parent_dialog or parent_window)
+        self.parent_window = parent_window
+        self.overlay = parent_window.party_panel
+        self.setWindowTitle("파티 현황 설정")
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        self.setStyleSheet("""
+            #PartySettingsContainer {
+                background-color: rgba(22, 22, 26, 0.98);
+                border: 1.5px solid rgba(255, 255, 255, 0.12);
+                border-radius: 16px;
+            }
+            QLabel {
+                color: #f5f5f7;
+                font-family: 'Pretendard', 'Malgun Gothic', -apple-system, sans-serif;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QComboBox {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+                padding: 6px 12px;
+                color: #ffffff;
+                font-family: 'Pretendard', 'Malgun Gothic', -apple-system, sans-serif;
+                font-size: 12px;
+            }
+            QComboBox:hover {
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.20);
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1e1e24;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                selection-background-color: #0a84ff;
+                selection-color: #ffffff;
+                color: #ffffff;
+                padding: 4px;
+            }
+            QSlider {
+                background: transparent;
+            }
+            QSlider::groove:horizontal {
+                border: none;
+                height: 4px;
+                background: rgba(255, 255, 255, 0.1);
+                border-radius: 2px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #0a84ff;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: #ffffff;
+                border: none;
+                width: 14px;
+                height: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #0a84ff;
+            }
+            QPushButton {
+                background-color: rgba(10, 132, 255, 0.15);
+                border: 1px solid rgba(10, 132, 255, 0.3);
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-weight: bold;
+                color: #0a84ff;
+                font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(10, 132, 255, 0.25);
+            }
+            QPushButton#CloseBtn {
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+            QPushButton#CloseBtn:hover {
+                background-color: rgba(255, 255, 255, 0.16);
+            }
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        container = QFrame()
+        container.setObjectName("PartySettingsContainer")
+        container_lay = QVBoxLayout(container)
+        container_lay.setContentsMargins(20, 20, 20, 20)
+        container_lay.setSpacing(12)
+        
+        # Title with Lucide settings icon
+        title_lay = QHBoxLayout()
+        title_lay.setSpacing(8)
+        title_icon = QLabel()
+        title_icon.setFixedSize(20, 20)
+        title_icon.setPixmap(get_svg_pixmap(LUCIDE_SETTINGS_SVG, 20))
+        
+        title_lbl = QLabel("파티 현황 설정")
+        title_lbl.setStyleSheet("font-size: 16px; font-weight: 800; color: #0a84ff;")
+        
+        title_lay.addWidget(title_icon)
+        title_lay.addWidget(title_lbl)
+        title_lay.addStretch()
+        container_lay.addLayout(title_lay)
+        
+        # 1. Class Selection Group (Dynamic from active party states)
+        class_group = QFrame()
+        class_group.setStyleSheet("QFrame { background-color: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px; }")
+        cg_lay = QVBoxLayout(class_group)
+        cg_lay.setContentsMargins(10, 10, 10, 10)
+        cg_lay.setSpacing(6)
+        
+        cg_title_lay = QHBoxLayout()
+        cg_title_lay.setSpacing(6)
+        user_icon = QLabel()
+        user_icon.setFixedSize(14, 14)
+        user_icon.setPixmap(get_svg_pixmap(LUCIDE_USER_SVG, 14))
+        cg_title = QLabel("로스트아크 직업 설정")
+        cg_title.setStyleSheet("color: #0a84ff; font-weight: bold; font-size: 13px;")
+        cg_title_lay.addWidget(user_icon)
+        cg_title_lay.addWidget(cg_title)
+        cg_title_lay.addStretch()
+        cg_lay.addLayout(cg_title_lay)
+        
+        self.class_combos = {}
+        player = self.parent_window.player_name
+        
+        p_lay = QHBoxLayout()
+        lbl = QLabel(f"{player}:")
+        lbl.setStyleSheet("font-size: 12px; color: #dddddd;")
+        lbl.setMinimumWidth(80)
+        
+        combo = QComboBox()
+        combo.addItems(list(LOST_ARK_CLASSES.keys()))
+        default_val = getattr(self.parent_window, 'player_class', "홀리나이트")
+        combo.setCurrentText(default_val)
+        combo.currentTextChanged.connect(lambda text, p=player: self.change_player_class(p, text))
+        
+        p_lay.addWidget(lbl)
+        p_lay.addWidget(combo)
+        cg_lay.addLayout(p_lay)
+        self.class_combos[player] = combo
+            
+        container_lay.addWidget(class_group)
+        
+        # Form grid for settings
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        
+        # Theme Preset
+        theme_lbl = QLabel("테마 프리셋:")
+        theme_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(list(THEMES.keys()))
+        if self.overlay:
+            self.theme_combo.setCurrentText(self.overlay.theme_name)
+        self.theme_combo.currentTextChanged.connect(self.change_theme)
+        grid.addWidget(theme_lbl, 0, 0)
+        grid.addWidget(self.theme_combo, 0, 1)
+        
+        # Layout Mode
+        layout_lbl = QLabel("배치 형태 레이아웃:")
+        layout_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
+        self.layout_combo = QComboBox()
+        self.layout_combo.addItems(["세로형", "가로형"])
+        if self.overlay:
+            self.layout_combo.setCurrentText(self.overlay.layout_mode)
+        self.layout_combo.currentTextChanged.connect(self.change_layout)
+        grid.addWidget(layout_lbl, 1, 0)
+        grid.addWidget(self.layout_combo, 1, 1)
+        
+        # Display Mode
+        display_lbl = QLabel("세부 표시 모드:")
+        display_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
+        self.display_combo = QComboBox()
+        self.display_combo.addItems(["상세 정보", "아이콘만"])
+        if self.overlay:
+            self.display_combo.setCurrentText(self.overlay.display_mode)
+        self.display_combo.currentTextChanged.connect(self.change_display)
+        grid.addWidget(display_lbl, 2, 0)
+        grid.addWidget(self.display_combo, 2, 1)
+        
+        container_lay.addLayout(grid)
+        
+        # Click-Through Toggle Row (Moved from main settings dialog)
+        self.btn_panel_click_through = QPushButton()
+        self.btn_panel_click_through.clicked.connect(self.toggle_panel_click_through)
+        self.update_click_through_button_text()
+        container_lay.addWidget(self.btn_panel_click_through)
+        
+        # Sliders for UI Scale, Opacity, Speed
+        # UI Scale
+        scale_lbl_lay = QHBoxLayout()
+        scale_lbl = QLabel("크기 스케일:")
+        scale_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
+        self.lbl_scale_val = QLabel("1.0x")
+        self.lbl_scale_val.setStyleSheet("font-size: 11px; opacity: 0.6;")
+        scale_lbl_lay.addWidget(scale_lbl)
+        scale_lbl_lay.addStretch()
+        scale_lbl_lay.addWidget(self.lbl_scale_val)
+        container_lay.addLayout(scale_lbl_lay)
+        
+        self.scale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.scale_slider.setRange(8, 15)
+        if self.overlay:
+            self.scale_slider.setValue(int(self.overlay.ui_scale * 10))
+            self.lbl_scale_val.setText(f"{self.overlay.ui_scale:.1f}x")
+        self.scale_slider.valueChanged.connect(self.change_scale)
+        container_lay.addWidget(self.scale_slider)
+        
+        # Opacity (Moved from main settings dialog)
+        opacity_lbl_lay = QHBoxLayout()
+        opacity_lbl = QLabel("투명도:")
+        opacity_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
+        self.lbl_opacity_val = QLabel("90%")
+        self.lbl_opacity_val.setStyleSheet("font-size: 11px; opacity: 0.6;")
+        opacity_lbl_lay.addWidget(opacity_lbl)
+        opacity_lbl_lay.addStretch()
+        opacity_lbl_lay.addWidget(self.lbl_opacity_val)
+        container_lay.addLayout(opacity_lbl_lay)
+        
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(20, 100)
+        if self.overlay:
+            self.opacity_slider.setValue(int(self.overlay.panel_opacity))
+            self.lbl_opacity_val.setText(f"{self.overlay.panel_opacity}%")
+        self.opacity_slider.valueChanged.connect(self.change_opacity)
+        container_lay.addWidget(self.opacity_slider)
+        
+        # Ready Dot Speed
+        speed_lbl_lay = QHBoxLayout()
+        speed_lbl = QLabel("Ready 도트 펄스 속도:")
+        speed_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
+        self.lbl_speed_val = QLabel("1.0x")
+        self.lbl_speed_val.setStyleSheet("font-size: 11px; opacity: 0.6;")
+        speed_lbl_lay.addWidget(speed_lbl)
+        speed_lbl_lay.addStretch()
+        speed_lbl_lay.addWidget(self.lbl_speed_val)
+        container_lay.addLayout(speed_lbl_lay)
+        
+        self.speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self.speed_slider.setRange(5, 20)
+        if self.overlay:
+            self.speed_slider.setValue(int(self.overlay.speed * 10))
+            self.lbl_speed_val.setText(f"{self.overlay.speed:.1f}x")
+        self.speed_slider.valueChanged.connect(self.change_speed)
+        container_lay.addWidget(self.speed_slider)
+        
+        # Close Button
+        btn_lay = QHBoxLayout()
+        btn_lay.addStretch()
+        close_btn = QPushButton("확인")
+        close_btn.setObjectName("CloseBtn")
+        close_btn.clicked.connect(self.close_and_save)
+        btn_lay.addWidget(close_btn)
+        container_lay.addLayout(btn_lay)
+        
+        layout.addWidget(container)
+        self.resize(320, 520)
+        
+        self.drag_position = None
+        
+    def toggle_panel_click_through(self):
+        if self.overlay:
+            self.overlay.set_click_through(not self.overlay.panel_click_through)
+            self.update_click_through_button_text()
+            self.parent_window.save_settings()
+
+    def update_click_through_button_text(self):
+        if self.overlay and self.overlay.panel_click_through:
+            self.btn_panel_click_through.setText("마우스 투과 상태: 켬")
+            self.btn_panel_click_through.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(48, 209, 88, 0.15);
+                    border: 1px solid rgba(48, 209, 88, 0.35);
+                    border-radius: 8px;
+                    padding: 8px;
+                    font-weight: 600;
+                    color: #30d158;
+                }
+                QPushButton:hover {
+                    background-color: rgba(48, 209, 88, 0.25);
+                }
+            """)
         else:
-            new_style = style & ~WS_EX_TRANSPARENT
-        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
-        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)
+            self.btn_panel_click_through.setText("마우스 투과 상태: 끔")
+            self.btn_panel_click_through.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(255, 255, 255, 0.05);
+                    border: 1px solid rgba(255, 255, 255, 0.15);
+                    border-radius: 8px;
+                    padding: 8px;
+                    font-weight: 600;
+                    color: #ffffff;
+                }
+                QPushButton:hover {
+                    background-color: rgba(255, 255, 255, 0.10);
+                }
+            """)
+
+    def change_player_class(self, player, text):
+        if self.overlay:
+            self.overlay.player_classes[player] = text
+            self.overlay.rebuild_cards()
+            self.overlay.apply_theme()
+            
+    def change_theme(self, text):
+        if self.overlay:
+            self.overlay.theme_name = text
+            self.overlay.apply_theme()
+            
+    def change_layout(self, text):
+        if self.overlay:
+            self.overlay.layout_mode = text
+            self.overlay.rebuild_cards()
+            self.overlay.apply_theme()
+            
+    def change_display(self, text):
+        if self.overlay:
+            self.overlay.display_mode = text
+            self.overlay.rebuild_cards()
+            self.overlay.apply_theme()
+            
+    def change_scale(self, value):
+        if self.overlay:
+            self.overlay.ui_scale = value / 10.0
+            self.lbl_scale_val.setText(f"{self.overlay.ui_scale:.1f}x")
+            self.overlay.rebuild_cards()
+            self.overlay.apply_theme()
+            
+    def change_opacity(self, value):
+        if self.overlay:
+            self.overlay.panel_opacity = value
+            self.overlay.setWindowOpacity(value / 100.0)
+            self.lbl_opacity_val.setText(f"{value}%")
+            
+    def change_speed(self, value):
+        if self.overlay:
+            self.overlay.speed = value / 10.0
+            self.lbl_speed_val.setText(f"{self.overlay.speed:.1f}x")
+            self.overlay.apply_theme()
+            
+    def close_and_save(self):
+        self.parent_window.save_settings()
+        self.accept()
+        
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.MouseButton.LeftButton and self.drag_position is not None:
+            self.move(event.globalPosition().toPoint() - self.drag_position)
+            
+    def mouseReleaseEvent(self, event):
+        self.drag_position = None
 
 
 class SettingsModal(QDialog):
@@ -1205,50 +1833,24 @@ class SettingsModal(QDialog):
         self.btn_show_panel.clicked.connect(self.toggle_party_panel_visible)
         lay.addWidget(self.btn_show_panel)
         
-        # Party Panel Click-Through Toggle
-        self.btn_panel_click_through = QPushButton("파티 현황 마우스 투과: 끔")
-        self.btn_panel_click_through.setStyleSheet("""
+        # Party Panel Settings Button
+        self.btn_party_settings = QPushButton("파티 현황 설정")
+        self.btn_party_settings.setIcon(get_svg_icon(LUCIDE_SETTINGS_SVG))
+        self.btn_party_settings.setStyleSheet("""
             QPushButton {
-                background-color: rgba(255, 149, 0, 0.08);
-                border: 1px solid rgba(255, 149, 0, 0.20);
+                background-color: rgba(10, 132, 255, 0.08);
+                border: 1px solid rgba(10, 132, 255, 0.20);
                 border-radius: 10px;
                 padding: 8px;
                 font-weight: 600;
-                color: #ff9500;
+                color: #0a84ff;
             }
             QPushButton:hover {
-                background-color: rgba(255, 149, 0, 0.18);
+                background-color: rgba(10, 132, 255, 0.18);
             }
         """)
-        self.btn_panel_click_through.clicked.connect(self.toggle_panel_click_through)
-        lay.addWidget(self.btn_panel_click_through)
-        
-        # Party Panel Opacity Slider Group
-        opacity_lay = QHBoxLayout()
-        opacity_lay.setSpacing(10)
-        opacity_lay.setContentsMargins(0, 5, 0, 5)
-        
-        lbl_opacity_title = QLabel("파티 현황 투명도:")
-        lbl_opacity_title.setStyleSheet("font-size: 12px; font-weight: bold; border: none; background: transparent; color: #ff9500;")
-        
-        self.party_opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.party_opacity_slider.setRange(10, 100)
-        # Safely read value, fallback to 90
-        initial_op = 90
-        if self.parent_window and self.parent_window.party_panel:
-            initial_op = getattr(self.parent_window.party_panel, 'panel_opacity', 90)
-        self.party_opacity_slider.setValue(initial_op)
-        self.party_opacity_slider.valueChanged.connect(self.on_party_opacity_changed)
-        
-        self.lbl_party_opacity_val = QLabel(f"{self.party_opacity_slider.value()}%")
-        self.lbl_party_opacity_val.setStyleSheet("font-size: 12px; font-weight: bold; border: none; background: transparent;")
-        self.lbl_party_opacity_val.setFixedWidth(35)
-        self.lbl_party_opacity_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        
-        opacity_lay.addWidget(lbl_opacity_title)
-        opacity_lay.addWidget(self.party_opacity_slider)
-        opacity_lay.addWidget(self.lbl_party_opacity_val)
-        lay.addLayout(opacity_lay)
+        self.btn_party_settings.clicked.connect(self.open_party_design_settings)
+        lay.addWidget(self.btn_party_settings)
         
         self.update_network_tab_texts()
         lay.addStretch()
@@ -1391,14 +1993,6 @@ class SettingsModal(QDialog):
                 slot.trigger_key = text.strip().lower() if text.strip() else None
                 self.parent_window.save_settings()
 
-    def on_party_opacity_changed(self, value):
-        self.lbl_party_opacity_val.setText(f"{value}%")
-        if self.parent_window and self.parent_window.party_panel:
-            self.parent_window.party_panel.setWindowOpacity(value / 100.0)
-            self.parent_window.party_panel.panel_opacity = value
-            self.parent_window.save_settings()
-
-
     def update_network_tab_texts(self):
         if self.parent_window.client_running:
             self.btn_toggle_client.setText("접속 끊기")
@@ -1412,37 +2006,6 @@ class SettingsModal(QDialog):
             self.btn_show_panel.setText("파티 현황 끄기")
         else:
             self.btn_show_panel.setText("파티 현황 켜기")
-        
-        if self.parent_window.party_panel.panel_click_through:
-            self.btn_panel_click_through.setText("파티 현황 마우스 투과: 켬")
-            self.btn_panel_click_through.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(255, 149, 0, 0.20);
-                    border: 1px solid rgba(255, 149, 0, 0.40);
-                    border-radius: 10px;
-                    padding: 8px;
-                    font-weight: 600;
-                    color: #ff9500;
-                }
-                QPushButton:hover {
-                    background-color: rgba(255, 149, 0, 0.30);
-                }
-            """)
-        else:
-            self.btn_panel_click_through.setText("파티 현황 마우스 투과: 끔")
-            self.btn_panel_click_through.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(255, 149, 0, 0.08);
-                    border: 1px solid rgba(255, 149, 0, 0.20);
-                    border-radius: 10px;
-                    padding: 8px;
-                    font-weight: 600;
-                    color: #ff9500;
-                }
-                QPushButton:hover {
-                    background-color: rgba(255, 149, 0, 0.18);
-                }
-            """)
 
     def rotate_spinner_icon(self):
         self.spinner_angle = (self.spinner_angle + 8) % 360
@@ -1483,7 +2046,6 @@ class SettingsModal(QDialog):
         self.parent_window.player_name = char_name
         self.parent_window.server_url = url
         self.parent_window.room_id = room_id
-        self.parent_window.save_settings()
         
         if self.parent_window.client_running:
             self.spinner_timer.stop()
@@ -1506,11 +2068,14 @@ class SettingsModal(QDialog):
             self.parent_window.party_panel.activateWindow()
         self.update_network_tab_texts()
 
-    def toggle_panel_click_through(self):
-        panel = self.parent_window.party_panel
-        panel.set_click_through(not panel.panel_click_through)
-        self.parent_window.save_settings()
-        self.update_network_tab_texts()
+    def open_party_design_settings(self):
+        if hasattr(self, 'party_settings_dlg') and self.party_settings_dlg and self.party_settings_dlg.isVisible():
+            self.party_settings_dlg.raise_()
+            self.party_settings_dlg.activateWindow()
+            return
+            
+        self.party_settings_dlg = PartyOverlaySettingsModal(self.parent_window, self)
+        self.party_settings_dlg.show()
 
     def save_and_close(self):
         self.parent_window.hotkey_follow = self.temp_follow
@@ -1829,7 +2394,7 @@ class ResizableContainer(QFrame):
 class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('펭구 줌인 Pro v2.0')
+        self.setWindowTitle('펭구 줌인 Pro v2.34')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
@@ -1971,6 +2536,8 @@ class MagnifierWindow(QMainWindow):
         self.server_url = "https://pengzoom-pro-relay.onrender.com"
         self.room_id = "default"
         self.hide_ui_on_transparent = False
+        self.client_id = None
+        self.player_class = "홀리나이트"
         
         if os.path.exists(config_path):
             try:
@@ -1990,6 +2557,8 @@ class MagnifierWindow(QMainWindow):
                         self.server_url = self.server_url.replace(":9090", ":19090")
                     self.room_id = data.get('room_id', "default")
                     self.hide_ui_on_transparent = data.get('hide_ui_on_transparent', False)
+                    self.client_id = data.get('client_id', None)
+                    self.player_class = data.get('player_class', "홀리나이트")
                     
                     # Restore party panel position and size
                     party_pos = data.get('party_panel_pos', None)
@@ -2009,6 +2578,57 @@ class MagnifierWindow(QMainWindow):
                     panel_ct = data.get('party_panel_click_through', False)
                     if panel_ct and self.party_panel:
                         self.party_panel.set_click_through(True)
+                        
+                    # Restore additional party panel custom options
+                    if self.party_panel:
+                        theme_loaded = data.get('party_theme_name', "옵시디언 글래스")
+                        if theme_loaded == "Obsidian Glass (Default)":
+                            theme_loaded = "옵시디언 글래스"
+                        elif theme_loaded == "Nordic Light (Minimal)":
+                            theme_loaded = "노르딕 라이트"
+                        elif theme_loaded == "Crimson Velvet (Luxury)":
+                            theme_loaded = "크림슨 벨벳"
+                        if theme_loaded not in THEMES:
+                            theme_loaded = "옵시디언 글래스"
+                        self.party_panel.theme_name = theme_loaded
+                        
+                        layout_loaded = data.get('party_layout_mode', "세로형")
+                        if layout_loaded == "List":
+                            layout_loaded = "세로형"
+                        elif layout_loaded == "Grid":
+                            layout_loaded = "가로형"
+                        if layout_loaded not in ["세로형", "가로형"]:
+                            layout_loaded = "세로형"
+                        self.party_panel.layout_mode = layout_loaded
+                        
+                        display_loaded = data.get('party_display_mode', "상세 정보")
+                        if display_loaded == "Detailed":
+                            display_loaded = "상세 정보"
+                        elif display_loaded == "Minimal":
+                            display_loaded = "아이콘만"
+                        if display_loaded not in ["상세 정보", "아이콘만"]:
+                            display_loaded = "상세 정보"
+                        self.party_panel.display_mode = display_loaded
+                        
+                        self.party_panel.ui_scale = data.get('party_ui_scale', 1.0)
+                        self.party_panel.speed = data.get('party_speed', 1.0)
+                        self.party_panel.intensity = data.get('party_intensity', 1.0)
+                        
+                        classes_loaded = data.get('party_player_classes', {})
+                        normalized_classes = {}
+                        for player, cls_name in classes_loaded.items():
+                            if cls_name in LOST_ARK_CLASSES:
+                                normalized_classes[player] = cls_name
+                            else:
+                                clean_name = cls_name.split(" ")[0]
+                                if clean_name in LOST_ARK_CLASSES:
+                                    normalized_classes[player] = clean_name
+                                else:
+                                    normalized_classes[player] = "홀리나이트"
+                        self.party_panel.player_classes = normalized_classes
+                        
+                        self.party_panel.apply_theme()
+                        self.party_panel.rebuild_cards()
                     
                     # Restore skill slots and templates (grayscale CV2 matrices) from config
                     skills = data.get('skills', [])
@@ -2042,9 +2662,15 @@ class MagnifierWindow(QMainWindow):
                         slot = self.detector.slots.get(name)
                         if slot:
                             slot.trigger_key = trigger_key
+                    if not self.client_id:
+                        import uuid
+                        self.client_id = str(uuid.uuid4())
                     return
             except Exception:
                 pass
+        if not self.client_id:
+            import uuid
+            self.client_id = str(uuid.uuid4())
 
     def save_settings(self):
         config_path = self.get_config_path()
@@ -2090,11 +2716,26 @@ class MagnifierWindow(QMainWindow):
             party_pos = None
             party_size = None
             party_opacity = 90
+            party_theme = "옵시디언 글래스"
+            party_layout = "세로형"
+            party_display = "상세 정보"
+            party_scale = 1.0
+            party_speed = 1.0
+            party_intensity = 1.0
+            party_classes = {}
+            
             if self.party_panel:
                 pos = self.party_panel.pos()
                 party_pos = [pos.x(), pos.y()]
                 party_size = [self.party_panel.width(), self.party_panel.height()]
                 party_opacity = getattr(self.party_panel, 'panel_opacity', 90)
+                party_theme = getattr(self.party_panel, 'theme_name', "옵시디언 글래스")
+                party_layout = getattr(self.party_panel, 'layout_mode', "세로형")
+                party_display = getattr(self.party_panel, 'display_mode', "상세 정보")
+                party_scale = getattr(self.party_panel, 'ui_scale', 1.0)
+                party_speed = getattr(self.party_panel, 'speed', 1.0)
+                party_intensity = getattr(self.party_panel, 'intensity', 1.0)
+                party_classes = getattr(self.party_panel, 'player_classes', {})
 
             data = {
                 'zoom_factor': self.zoom_factor,
@@ -2106,11 +2747,20 @@ class MagnifierWindow(QMainWindow):
                 'server_url': self.server_url,
                 'room_id': self.room_id,
                 'hide_ui_on_transparent': self.hide_ui_on_transparent,
+                'client_id': self.client_id,
+                'player_class': getattr(self, 'player_class', "홀리나이트"),
                 'skills': skills_data,
                 'party_panel_pos': party_pos,
                 'party_panel_size': party_size,
                 'party_panel_opacity': party_opacity,
-                'party_panel_click_through': self.party_panel.panel_click_through if self.party_panel else False
+                'party_panel_click_through': self.party_panel.panel_click_through if self.party_panel else False,
+                'party_theme_name': party_theme,
+                'party_layout_mode': party_layout,
+                'party_display_mode': party_display,
+                'party_ui_scale': party_scale,
+                'party_speed': party_speed,
+                'party_intensity': party_intensity,
+                'party_player_classes': party_classes
             }
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
@@ -2518,15 +3168,21 @@ class MagnifierWindow(QMainWindow):
             self.client = network_manager.CooldownClient(
                 server_url=self.server_url, 
                 player_name=self.player_name,
-                room_id=self.room_id
+                room_id=self.room_id,
+                client_id=self.client_id,
+                class_name=getattr(self, 'player_class', "홀리나이트")
             )
-            self.client.status_updated.connect(self.party_panel.update_states)
-            self.client.connection_failed.connect(self.on_client_connection_failed)
-            self.client.connection_ok.connect(self.on_client_connection_ok)
+            self.client.status_updated.connect(self.party_panel.update_states, Qt.ConnectionType.QueuedConnection)
+            self.client.connection_failed.connect(self.on_client_connection_failed, Qt.ConnectionType.QueuedConnection)
+            self.client.connection_ok.connect(self.on_client_connection_ok, Qt.ConnectionType.QueuedConnection)
             self.client.start()
             self.client_running = True
         except Exception as e:
-            show_dark_message_box(self, "접속 오류", f"대기실 접속 시도 중 오류가 발생했습니다:\n{str(e)}", QMessageBox.Icon.Critical)
+            self.client_running = False
+            try:
+                show_dark_message_box(self, "접속 오류", f"대기실 접속 시도 중 오류가 발생했습니다:\n{str(e)}", QMessageBox.Icon.Critical)
+            except Exception:
+                pass
 
     def on_client_connection_ok(self):
         if hasattr(self, 'config_dialog_ref') and self.config_dialog_ref and self.config_dialog_ref.isVisible():
@@ -2964,7 +3620,6 @@ if __name__ == '__main__':
     except Exception:
         pass
         
-        # Ensure icon is loaded properly
     window = MagnifierWindow()
     window.show()
     sys.exit(app.exec())
