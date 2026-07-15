@@ -770,6 +770,7 @@ class PartyPanel(QWidget):
             self.update_states(self.parent_window.client.party_states)
             
     def update_states(self, party_states):
+        received_at = time.time()
         current_players = set(party_states.keys())
         
         # Remove old players
@@ -871,9 +872,20 @@ class PartyPanel(QWidget):
             for skill, s_info in (skills.items() if isinstance(skills, dict) else {}):
                 if not isinstance(skill, str) or skill.startswith('_') or not isinstance(s_info, dict):
                     continue
-                is_ready = s_info.get("is_ready", True)
-                cooldown_duration = s_info.get("cooldown_duration", 0)
-                timestamp = s_info.get("timestamp", 0.0)
+                is_ready = bool(s_info.get("is_ready", False))
+                try:
+                    cooldown_duration = max(0.0, float(s_info.get("cooldown_duration", 0) or 0))
+                except (TypeError, ValueError):
+                    cooldown_duration = 0.0
+                try:
+                    timestamp = float(s_info.get("timestamp", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    timestamp = 0.0
+                reported_deadline = (
+                    timestamp + cooldown_duration
+                    if not is_ready and cooldown_duration > 0.0
+                    else 0.0
+                )
                 
                 if skill not in p_data["skill_widgets"]:
                     badge = QFrame()
@@ -932,14 +944,56 @@ class PartyPanel(QWidget):
                         "is_ready": is_ready,
                         "cooldown_duration": cooldown_duration,
                         "timestamp": timestamp,
+                        "cycle_total": cooldown_duration if not is_ready else 0.0,
+                        "cooldown_deadline": reported_deadline,
                         "flash_val": 0.0,
                         "was_ready": is_ready
                     }
                 else:
                     s_widgets = p_data["skill_widgets"][skill]
+                    previous_ready = bool(s_widgets.get("is_ready", False))
+                    previous_total = max(0.0, float(s_widgets.get("cycle_total", 0.0) or 0.0))
+                    previous_deadline = max(0.0, float(s_widgets.get("cooldown_deadline", 0.0) or 0.0))
+                    expected_remaining = max(0.0, previous_deadline - received_at)
+                    restarted_while_cooldown = (
+                        reported_deadline > 0.0
+                        and (
+                            previous_deadline <= received_at
+                            or cooldown_duration > expected_remaining + 1.25
+                        )
+                    )
+
+                    if is_ready:
+                        cycle_total = 0.0
+                        cooldown_deadline = 0.0
+                    elif previous_ready:
+                        # A Ready -> Cooldown transition starts a new visual cycle.
+                        cycle_total = cooldown_duration
+                        cooldown_deadline = reported_deadline
+                    elif restarted_while_cooldown:
+                        # Gauge skills or cooldown resets can start another cycle
+                        # without a debounced Ready frame between the two uses.
+                        # A meaningful increase beyond the expected remaining
+                        # time re-latches the total and deadline.
+                        cycle_total = cooldown_duration
+                        cooldown_deadline = reported_deadline
+                    else:
+                        # Periodic sync reports the *remaining* seconds.  Keep the
+                        # first total as the ring denominator and only allow the
+                        # estimated deadline to move earlier (OCR cooldown cut).
+                        cycle_total = max(previous_total, cooldown_duration)
+                        if previous_deadline > 0.0 and reported_deadline > 0.0:
+                            cooldown_deadline = min(previous_deadline, reported_deadline)
+                        elif previous_deadline > 0.0:
+                            cooldown_deadline = previous_deadline
+                        else:
+                            cooldown_deadline = reported_deadline
+
                     s_widgets["is_ready"] = is_ready
                     s_widgets["cooldown_duration"] = cooldown_duration
                     s_widgets["timestamp"] = timestamp
+                    s_widgets["cycle_total"] = cycle_total
+                    s_widgets["cooldown_deadline"] = cooldown_deadline
                     
                 s_widgets = p_data["skill_widgets"][skill]
                 if self.display_mode == "아이콘만":
@@ -954,22 +1008,19 @@ class PartyPanel(QWidget):
         
         for player, p_data in list(self.widgets.items()):
             for skill, s_widgets in list(p_data["skill_widgets"].items()):
-                is_ready = bool(s_widgets.get("is_ready", True))
+                is_ready = bool(s_widgets.get("is_ready", False))
                 try:
-                    cd_duration = max(0.0, float(s_widgets.get("cooldown_duration", 0) or 0))
+                    cycle_total = max(0.0, float(s_widgets.get("cycle_total", 0) or 0))
                 except (TypeError, ValueError):
-                    cd_duration = 0.0
+                    cycle_total = 0.0
                 try:
-                    timestamp = float(s_widgets.get("timestamp", 0.0) or 0.0)
+                    cooldown_deadline = max(0.0, float(s_widgets.get("cooldown_deadline", 0) or 0))
                 except (TypeError, ValueError):
-                    timestamp = 0.0
+                    cooldown_deadline = 0.0
                 
                 remaining = 0.0
-                if not is_ready and cd_duration > 0:
-                    elapsed = current_time - timestamp
-                    remaining = max(0.0, cd_duration - elapsed)
-                    if remaining <= 0.0:
-                        is_ready = True
+                if not is_ready and cooldown_deadline > 0.0:
+                    remaining = max(0.0, cooldown_deadline - current_time)
                         
                 if is_ready:
                     if not s_widgets.get("was_ready", True):
@@ -998,8 +1049,8 @@ class PartyPanel(QWidget):
                     s_widgets["glow"].hide()
                     s_widgets["progress"].show()
 
-                    if cd_duration > 0.0:
-                        pct = (remaining / cd_duration) * 100.0
+                    if cycle_total > 0.0 and remaining > 0.0:
+                        pct = max(0.0, min(100.0, (remaining / cycle_total) * 100.0))
                         s_widgets["progress"].setValue(pct)
 
                         if remaining >= 1.0:
@@ -1009,12 +1060,12 @@ class PartyPanel(QWidget):
                             s_widgets["progress"].setText(f"{remaining:.1f}")
                             s_widgets["status_text_lbl"].setText(f"{remaining:.1f}s")
                     else:
-                        # Legacy clients or an OCR frame still being acquired can
-                        # legitimately report not-ready without a duration.  Show
-                        # an indeterminate state and never divide by zero.
+                        # Countdown reaching zero is not Ready.  Gauge-dependent
+                        # skills can stay unavailable until the Ready template is
+                        # actually recognized.
                         s_widgets["progress"].setValue(0.0)
                         s_widgets["progress"].setText("…")
-                        s_widgets["status_text_lbl"].setText("인식 중")
+                        s_widgets["status_text_lbl"].setText("Cooldown")
                         
                     s_widgets["status_text_lbl"].setStyleSheet(f"color: {theme['cooldown']}; font-size: {int(9*self.ui_scale)}px; font-weight: bold;")
                     s_widgets["badge"].setStyleSheet(f"QFrame.SkillBadge {{ background-color: rgba(255, 69, 58, 0.03); border: 1.2px solid rgba(255, 69, 58, 0.12); }}")
@@ -1627,7 +1678,7 @@ class SettingsModal(QDialog):
         container_layout.addLayout(btn_layout)
         layout.addWidget(container)
         
-        self.resize(620, 650)
+        self.resize(620, 700)
         self.old_pos = None
 
     def setup_hotkeys_tab(self, tab):
@@ -1818,6 +1869,40 @@ class SettingsModal(QDialog):
         self.lbl_selected_status.setWordWrap(True)
         lay.addWidget(self.lbl_selected_status)
 
+        capture_line = QFrame()
+        capture_line.setFrameShape(QFrame.Shape.HLine)
+        capture_line.setStyleSheet("background-color: rgba(255,255,255,0.06);")
+        lay.addWidget(capture_line)
+
+        self.chk_developer_capture = QCheckBox(
+            "개발자 캡처 모드 (트리거 후 슬롯을 1초마다 저장)"
+        )
+        self.chk_developer_capture.setChecked(
+            bool(self.parent_window.detector.developer_capture_enabled)
+        )
+        self.chk_developer_capture.toggled.connect(self.on_developer_capture_toggled)
+        lay.addWidget(self.chk_developer_capture)
+
+        capture_controls = QHBoxLayout()
+        self.btn_open_capture_folder = QPushButton("캡처 폴더 열기")
+        self.btn_open_capture_folder.clicked.connect(self.open_developer_capture_folder)
+        capture_controls.addWidget(self.btn_open_capture_folder)
+        capture_controls.addStretch()
+        lay.addLayout(capture_controls)
+
+        self.lbl_developer_capture_status = QLabel(
+            "영역·쿨타임·트리거 키를 설정한 뒤 게임에서 해당 키를 누르면 "
+            "<스킬명>_30s.png 형식으로 저장됩니다."
+        )
+        self.lbl_developer_capture_status.setWordWrap(True)
+        self.lbl_developer_capture_status.setStyleSheet(
+            "font-size: 10px; color: rgba(255,255,255,0.55);"
+        )
+        lay.addWidget(self.lbl_developer_capture_status)
+        self.parent_window.detector.developer_capture_status.connect(
+            self.on_developer_capture_status
+        )
+
     def setup_ocr_tab(self, tab):
         lay = QVBoxLayout(tab)
         lay.setContentsMargins(12, 12, 12, 12)
@@ -1832,7 +1917,7 @@ class SettingsModal(QDialog):
         self.ocr_mode_combo = QComboBox()
         self.ocr_mode_combo.addItem("꺼짐", "off")
         self.ocr_mode_combo.addItem("Shadow (비교 로그)", "shadow")
-        self.ocr_mode_combo.addItem("OCR 자동", "primary")
+        self.ocr_mode_combo.addItem("숫자 OCR 자동", "primary")
         self.ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_controls_changed)
         select_row.addWidget(self.ocr_mode_combo, 2)
         lay.addLayout(select_row)
@@ -2424,6 +2509,48 @@ class SettingsModal(QDialog):
                 slot.trigger_key = text.strip().lower() if text.strip() else None
                 self.parent_window.save_settings()
 
+    def on_developer_capture_toggled(self, enabled):
+        enabled = bool(enabled)
+        self.parent_window.developer_capture_mode = enabled
+        self.parent_window.detector.developer_capture_enabled = enabled
+        if enabled:
+            self.lbl_developer_capture_status.setText(
+                "캡처 대기 중 — 설정한 트리거 키를 누르면 0.25초 뒤부터 1초마다 저장합니다."
+            )
+        else:
+            self.lbl_developer_capture_status.setText("개발자 캡처 모드가 꺼져 있습니다.")
+        self.parent_window.save_settings()
+
+    def open_developer_capture_folder(self):
+        try:
+            folder = self.parent_window.detector.developer_capture_root
+            folder.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(folder))
+        except Exception as exc:
+            show_dark_message_box(
+                self,
+                "폴더 열기 실패",
+                f"캡처 폴더를 열지 못했습니다:\n{exc}",
+                QMessageBox.Icon.Warning,
+            )
+
+    def on_developer_capture_status(self, skill_name, status):
+        if not isinstance(status, dict) or not hasattr(self, "lbl_developer_capture_status"):
+            return
+        event = status.get("event")
+        if event == "started":
+            text = f"[{skill_name}] 캡처 시작 — {status.get('expected', 0)}장 예정"
+        elif event == "saved":
+            text = (
+                f"[{skill_name}] {status.get('seconds', '?')}s 저장 "
+                f"({status.get('saved', 0)}장)"
+            )
+        elif event == "finished":
+            text = f"[{skill_name}] 캡처 완료 — {status.get('saved', 0)}장 저장"
+        else:
+            text = f"[{skill_name}] {status.get('reason', '캡처 오류')}"
+        self.lbl_developer_capture_status.setText(text)
+
     def lookup_character_class(self, connect_after=False):
         char_name = self.txt_char_name.text().strip()
         url = self.txt_host_url.text().strip()
@@ -2900,7 +3027,7 @@ class ResizableContainer(QFrame):
 class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('펭구 줌인 Pro v2.42')
+        self.setWindowTitle('펭구 줌인 Pro v2.43')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
@@ -3053,6 +3180,8 @@ class MagnifierWindow(QMainWindow):
         self.hide_ui_on_transparent = False
         self.client_id = None
         self.player_class = "홀리나이트"
+        self.developer_capture_mode = False
+        self.detector.developer_capture_enabled = False
         
         if os.path.exists(config_path):
             try:
@@ -3076,6 +3205,8 @@ class MagnifierWindow(QMainWindow):
                     self.hide_ui_on_transparent = data.get('hide_ui_on_transparent', False)
                     self.client_id = data.get('client_id', None)
                     self.player_class = data.get('player_class', "홀리나이트")
+                    self.developer_capture_mode = bool(data.get('developer_capture_mode', False))
+                    self.detector.developer_capture_enabled = self.developer_capture_mode
                     
                     # Restore party panel position and size
                     party_pos = data.get('party_panel_pos', None)
@@ -3284,6 +3415,7 @@ class MagnifierWindow(QMainWindow):
                 'hide_ui_on_transparent': self.hide_ui_on_transparent,
                 'client_id': self.client_id,
                 'player_class': getattr(self, 'player_class', "홀리나이트"),
+                'developer_capture_mode': bool(self.detector.developer_capture_enabled),
                 'skills': skills_data,
                 'party_panel_pos': party_pos,
                 'party_panel_size': party_size,
@@ -3638,8 +3770,6 @@ class MagnifierWindow(QMainWindow):
             slot = self.detector.slots.get(name)
             if slot:
                 duration = self.detector.get_remaining_seconds(name) if not is_ready else 0
-                if not is_ready and duration <= 0:
-                    return
                 self.client.send_update(name, is_ready, duration)
 
     def broadcast_skill_states(self):
@@ -3647,8 +3777,6 @@ class MagnifierWindow(QMainWindow):
         if self.client_running and self.client:
             for name, slot in self.detector.slots.items():
                 duration = self.detector.get_remaining_seconds(name) if not slot.is_ready else 0
-                if not slot.is_ready and duration <= 0:
-                    continue
                 self.client.send_update(name, slot.is_ready, duration)
 
     # Server hosting control (uses show_dark_message_box for gorgeous contrast popup)
@@ -4083,9 +4211,9 @@ class MagnifierWindow(QMainWindow):
                 return
 
             # Trigger manual cooldown for matching skill slots
-            for name, slot in self.detector.slots.items():
+            for name, slot in list(self.detector.slots.items()):
                 if getattr(slot, 'trigger_key', None) == current_key_name:
-                    self.detector.trigger_cooldown(name)
+                    self.detector.request_trigger(name)
                     
             if self.hotkey_transparent:
                 parts = [p.lower() for p in self.hotkey_transparent.split('+')]

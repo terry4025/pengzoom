@@ -1,5 +1,9 @@
 import os
 import time
+import math
+import queue
+import re
+from pathlib import Path
 import cv2
 import numpy as np
 import mss
@@ -19,13 +23,18 @@ class SkillSlot:
         self.rect = rect  # QRect or tuple (x, y, w, h)
         self.threshold = threshold
         self.template_path = None
-        self.is_ready = True  # Current state
-        self.last_similarity = 1.0
+        # Ready is never assumed.  The saved Ready template must be confirmed.
+        self.is_ready = False
+        self.last_similarity = 0.0
+        self.last_appearance_similarity = 0.0
+        self.last_brightness_ratio = 0.0
+        self.last_saturation_ratio = 0.0
         self.template = None        # Grayscale matrix for cv2 matchTemplate
         self.template_color = None  # RGB color matrix for UI Preview
         self.cooldown_duration = cooldown_duration
         self.trigger_key = None
         self.cooldown_start_time = 0.0
+        self.cooldown_seen_unready = False
         self._ready_consec_frames = 0
         self._not_ready_consec_frames = 0
         self.device_ratio = None
@@ -52,6 +61,7 @@ class CooldownDetector(QThread):
     cooldown_observed = pyqtSignal(str, int, float)  # (skill_name, seconds, confidence)
     ocr_quality = pyqtSignal(str, object)  # (skill_name, diagnostic dictionary)
     calibration_finished = pyqtSignal(str, object)  # (skill_name, result dictionary)
+    developer_capture_status = pyqtSignal(str, object)  # (skill_name, capture status)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -63,6 +73,12 @@ class CooldownDetector(QThread):
         self.ocr_engine = CooldownOcrEngine()
         self.dataset_collector = OcrDatasetCollector()
         self.collecting_slot_name = None
+        self.developer_capture_enabled = False
+        self.developer_capture_root = Path(
+            os.environ.get("APPDATA", str(Path.home()))
+        ) / "PengZoom" / "cooldown_captures"
+        self._trigger_queue = queue.Queue()
+        self._developer_sessions = {}
         
     def add_slot(self, name, rect, threshold=0.85, template_img=None, template_color=None, cooldown_duration=0):
         previous = self.slots.get(name)
@@ -100,6 +116,7 @@ class CooldownDetector(QThread):
             slot.ocr_profile_id = previous.ocr_profile_id
             slot.digit_roi = list(previous.digit_roi)
             slot.ocr_save_diagnostics = previous.ocr_save_diagnostics
+            slot.cooldown_seen_unready = previous.cooldown_seen_unready
             if cooldown_duration == 0:
                 slot.cooldown_duration = previous.cooldown_duration
             
@@ -185,14 +202,196 @@ class CooldownDetector(QThread):
             return [rect.x(), rect.y(), rect.width(), rect.height()]
         return list(rect) if rect else None
             
+    def request_trigger(self, name, trigger_monotonic=None):
+        """Queue a global-key trigger for detector-thread processing."""
+        if trigger_monotonic is None:
+            trigger_monotonic = time.monotonic()
+        self._trigger_queue.put((name, trigger_monotonic, time.time()))
+
     def trigger_cooldown(self, name):
-        slot = self.slots.get(name)
-        if slot and slot.ocr_mode != "primary":
-            slot.cooldown_start_time = time.time()
-            slot.is_ready = False
+        # Backwards-compatible entry point used by older callers.
+        self.request_trigger(name)
+
+    def _drain_trigger_requests(self, now_mono=None):
+        now_mono = time.monotonic() if now_mono is None else now_mono
+        while True:
+            try:
+                name, trigger_mono, trigger_wall = self._trigger_queue.get_nowait()
+            except queue.Empty:
+                break
+            slot = self.slots.get(name)
+            if slot is None:
+                continue
+
+            # pynput may repeat a held key.  Never restart an active capture or
+            # move its one-second labels forward.
+            if self.developer_capture_enabled and name in self._developer_sessions:
+                continue
+
+            # Manual time is Shadow/display bookkeeping only.  It never owns
+            # Ready; the Ready-template recognizer is the sole state authority.
+            if slot.cooldown_duration > 0:
+                slot.cooldown_start_time = trigger_wall
+                slot.cooldown_seen_unready = False
+
+            if self.developer_capture_enabled:
+                self._start_developer_capture(name, slot, trigger_mono, now_mono)
+
+    @staticmethod
+    def _safe_capture_name(name):
+        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(name)).strip(" .")
+        return safe[:80] or "skill"
+
+    def _start_developer_capture(self, name, slot, trigger_mono, now_mono):
+        if name in self._developer_sessions:
+            return
+        if slot.rect is None or slot.cooldown_duration <= 0:
+            self.developer_capture_status.emit(name, {
+                "event": "rejected",
+                "reason": "영역과 쿨타임(1초 이상)을 먼저 설정해 주세요.",
+            })
+            return
+
+        safe_name = self._safe_capture_name(name)
+        stamp = time.strftime("%Y%m%d_%H%M%S") + f"_{int((time.time() % 1) * 1000):03d}"
+        session_dir = self.developer_capture_root / f"{stamp}_{safe_name}"
+        suffix = 1
+        while session_dir.exists():
+            session_dir = self.developer_capture_root / f"{stamp}_{safe_name}_{suffix}"
+            suffix += 1
+        try:
+            session_dir.mkdir(parents=True, exist_ok=False)
+        except Exception as exc:
+            self.developer_capture_status.emit(name, {
+                "event": "error",
+                "reason": f"캡처 폴더 생성 실패: {exc}",
+                "directory": str(session_dir),
+            })
+            return
+        duration = max(1, int(math.ceil(slot.cooldown_duration)))
+        self._developer_sessions[name] = {
+            "directory": session_dir,
+            "safe_name": safe_name,
+            "duration": duration,
+            # Labels are anchored to the actual key event.  If the detector is
+            # delayed, elapsed labels are skipped instead of being shifted.
+            "capture_origin": trigger_mono + 0.25,
+            "last_label": None,
+            "saved": 0,
+        }
+        self.developer_capture_status.emit(name, {
+            "event": "started",
+            "directory": str(session_dir),
+            "expected": duration,
+        })
+
+    def _capture_developer_frame(self, name, frame_rgb, now_mono):
+        session = self._developer_sessions.get(name)
+        if session is None or now_mono < session["capture_origin"]:
+            return
+        elapsed = now_mono - session["capture_origin"]
+        label = session["duration"] - int(math.floor(elapsed))
+        if label <= 0:
+            self._finish_developer_capture(name)
+            return
+        if session["last_label"] == label:
+            return
+
+        # If the detector was delayed, save only the currently visible second;
+        # never duplicate one late frame under several labels.
+        output = session["directory"] / f"{session['safe_name']}_{label}s.png"
+        try:
+            bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR) if frame_rgb.ndim == 3 else frame_rgb
+            ok, encoded = cv2.imencode(".png", bgr)
+            if not ok:
+                raise OSError("PNG 인코딩 실패")
+            encoded.tofile(str(output))
+            session["last_label"] = label
+            session["saved"] += 1
+            self.developer_capture_status.emit(name, {
+                "event": "saved",
+                "seconds": label,
+                "saved": session["saved"],
+                "file": str(output),
+                "directory": str(session["directory"]),
+            })
+            if label == 1:
+                self._finish_developer_capture(name)
+        except Exception as exc:
+            self.developer_capture_status.emit(name, {
+                "event": "error",
+                "reason": str(exc),
+                "directory": str(session["directory"]),
+            })
+            self._developer_sessions.pop(name, None)
+
+    def _finish_developer_capture(self, name):
+        session = self._developer_sessions.pop(name, None)
+        if session is not None:
+            self.developer_capture_status.emit(name, {
+                "event": "finished",
+                "saved": session["saved"],
+                "directory": str(session["directory"]),
+            })
+
+    @staticmethod
+    def _resolve_skill_recognition(slot, raw_ready):
+        """Return Ready using only the saved skill-template recognizer."""
+        if raw_ready:
+            slot._ready_consec_frames += 1
+            slot._not_ready_consec_frames = 0
+        else:
+            slot._not_ready_consec_frames += 1
             slot._ready_consec_frames = 0
-            slot._not_ready_consec_frames = 3
-            self.state_changed.emit(name, False, slot.last_similarity)
+        if slot._ready_consec_frames >= 3:
+            return True
+        if slot._not_ready_consec_frames >= 3:
+            return False
+        return slot.is_ready
+
+    @staticmethod
+    def _ready_appearance_matches(slot, captured_rgb, match_gray):
+        """Reject darkened/desaturated cooldown icons that correlate as Ready."""
+        template_gray = slot.template
+        if template_gray is None:
+            return False
+        th, tw = template_gray.shape[:2]
+
+        current_gray = cv2.GaussianBlur(match_gray, (3, 3), 0)
+        reference_gray = cv2.GaussianBlur(template_gray, (3, 3), 0)
+        gray_delta = np.mean(cv2.absdiff(current_gray, reference_gray)) / 255.0
+        appearance_similarity = 1.0 - float(gray_delta)
+
+        reference_mean = float(np.mean(reference_gray))
+        current_mean = float(np.mean(current_gray))
+        brightness_ratio = current_mean / max(1.0, reference_mean)
+        saturation_ratio = 1.0
+
+        if slot.template_color is not None:
+            current_color = cv2.resize(captured_rgb, (tw, th), interpolation=cv2.INTER_AREA)
+            reference_color = slot.template_color
+            if reference_color.shape[:2] != (th, tw):
+                reference_color = cv2.resize(reference_color, (tw, th), interpolation=cv2.INTER_AREA)
+            current_color = cv2.GaussianBlur(current_color, (3, 3), 0)
+            reference_color = cv2.GaussianBlur(reference_color, (3, 3), 0)
+            color_delta = np.mean(
+                np.abs(current_color.astype(np.float32) - reference_color.astype(np.float32))
+            ) / 255.0
+            appearance_similarity = min(appearance_similarity, 1.0 - float(color_delta))
+
+            current_sat = float(np.mean(cv2.cvtColor(current_color, cv2.COLOR_RGB2HSV)[:, :, 1]))
+            reference_sat = float(np.mean(cv2.cvtColor(reference_color, cv2.COLOR_RGB2HSV)[:, :, 1]))
+            if reference_sat >= 12.0:
+                saturation_ratio = current_sat / reference_sat
+
+        slot.last_appearance_similarity = appearance_similarity
+        slot.last_brightness_ratio = brightness_ratio
+        slot.last_saturation_ratio = saturation_ratio
+        return (
+            appearance_similarity >= 0.82
+            and brightness_ratio >= 0.72
+            and saturation_ratio >= 0.55
+        )
 
     def get_remaining_seconds(self, name):
         slot = self.slots.get(name)
@@ -235,10 +434,15 @@ class CooldownDetector(QThread):
                 time.sleep(sleep_time)
                 
     def scan_all(self, sct):
+        self._drain_trigger_requests()
         for name, slot in list(self.slots.items()):
-            if slot.rect is None or (slot.template is None and not slot.ocr_enabled):
+            capture_active = name in self._developer_sessions
+            if slot.rect is None or (
+                slot.template is None and not slot.ocr_enabled and not capture_active
+            ):
                 continue
-                
+
+            skill_recognition_updated = False
             try:
                 if isinstance(slot.rect, QRect):
                     x, y, w, h = slot.rect.x(), slot.rect.y(), slot.rect.width(), slot.rect.height()
@@ -258,6 +462,8 @@ class CooldownDetector(QThread):
                 raw_capture = np.array(sct_img)
                 captured_rgb = cv2.cvtColor(raw_capture, cv2.COLOR_BGRA2RGB)
                 captured_gray = cv2.cvtColor(raw_capture, cv2.COLOR_BGRA2GRAY)
+                now_mono = time.monotonic()
+                self._capture_developer_frame(name, captured_rgb, now_mono)
 
                 max_val = slot.last_similarity
                 raw_ready = False
@@ -268,30 +474,30 @@ class CooldownDetector(QThread):
                     res = cv2.matchTemplate(match_gray, slot.template, cv2.TM_CCOEFF_NORMED)
                     _, max_val, _, _ = cv2.minMaxLoc(res)
                     slot.last_similarity = max_val
-                
-                # 1. Debounce similarity checks (3 consecutive frames to switch states)
-                raw_ready = slot.template is not None and max_val >= slot.threshold
-                if raw_ready:
-                    slot._ready_consec_frames += 1
-                    slot._not_ready_consec_frames = 0
+                    appearance_ready = self._ready_appearance_matches(
+                        slot, captured_rgb, match_gray
+                    )
                 else:
-                    slot._not_ready_consec_frames += 1
-                    slot._ready_consec_frames = 0
-                    
-                debounced_ready = slot.is_ready
-                if slot._ready_consec_frames >= 3:
-                    debounced_ready = True
-                elif slot._not_ready_consec_frames >= 3:
-                    debounced_ready = False
+                    appearance_ready = False
                 
-                new_ready = debounced_ready
+                # 1. Skill recognition OpenCV — the sole Ready/Cooldown authority.
+                raw_ready = (
+                    slot.template is not None
+                    and max_val >= slot.threshold
+                    and appearance_ready
+                )
+                template_ready = self._resolve_skill_recognition(slot, raw_ready)
+                skill_recognition_updated = True
+                # Commit before any OCR/dataset work.  A cooldown OCR failure
+                # must never suppress the higher-priority skill recognizer.
+                if template_ready != slot.is_ready:
+                    slot.is_ready = template_ready
+                    self.state_changed.emit(name, template_ready, max_val)
 
-                now_mono = time.monotonic()
                 if self.collecting_slot_name == name and self.dataset_collector.active:
                     self.dataset_collector.add_frame(captured_rgb, now_mono)
 
-                # OCR is intentionally throttled to 15 FPS even though template
-                # matching keeps its 50 ms loop for sub-200 ms Ready detection.
+                # 2. Cooldown-number OpenCV — measurement only, never Ready state.
                 observation = None
                 if slot.ocr_enabled and now_mono + 1e-6 >= slot.ocr_next_scan_at:
                     slot.ocr_last_scan_at = now_mono
@@ -334,62 +540,30 @@ class CooldownDetector(QThread):
                         frame=captured_rgb if slot.ocr_save_diagnostics else None,
                     )
                 
-                # 2. Check active timer
-                timer_expired = False
+                # 3. Manual Shadow timer bookkeeping.  Expiry cannot create Ready.
                 if slot.cooldown_start_time > 0.0:
-                    # OpenCV active recognition takes priority: if the current frame matches (raw_ready),
-                    # immediately cancel the timer and override to Ready status!
-                    if raw_ready:
+                    if not raw_ready:
+                        slot.cooldown_seen_unready = True
+                    if slot._ready_consec_frames >= 3 and slot.cooldown_seen_unready:
                         slot.cooldown_start_time = 0.0
-                        slot._ready_consec_frames = 3
-                        slot._not_ready_consec_frames = 0
-                        new_ready = True
-                        debounced_ready = True
                     else:
                         elapsed = time.time() - slot.cooldown_start_time
-                        if elapsed < slot.cooldown_duration:
-                            # Timer is active, force ready state to False
-                            new_ready = False
-                        else:
-                            # Timer expired
+                        if elapsed >= slot.cooldown_duration:
                             slot.cooldown_start_time = 0.0
-                            timer_expired = True
 
-                # In primary mode the accepted game number is authoritative.
-                # The timer above remains only as a Shadow comparison source.
-                ocr_ready_confirmed = (
-                    slot.ocr_active
-                    and slot._ready_consec_frames >= 3
-                    and (observation is None or not observation.accepted)
-                )
-                if ocr_ready_confirmed:
+                # 4. A confirmed Ready template closes the OCR temporal cycle.
+                if slot._ready_consec_frames >= 3 and slot.ocr_active:
                     slot.ocr_active = False
                     slot.ocr_last_seconds = None
                     slot.ocr_last_confirmed_at = 0.0
                     self.ocr_engine.mark_ready(name)
 
-                if slot.ocr_mode == "primary":
-                    if observation is not None and observation.accepted:
-                        slot.cooldown_start_time = 0.0
-                        new_ready = False
-                    elif ocr_ready_confirmed:
-                        new_ready = True
-                    elif slot.ocr_active:
-                        # During a brief unknown OCR frame, keep the active
-                        # cooldown instead of letting template noise override it.
-                        new_ready = False
-                    else:
-                        # In OCR-authoritative mode a Ready-template mismatch is
-                        # not evidence that cooldown started.  Only a confirmed
-                        # number may transition Ready -> cooldown.
-                        new_ready = slot.is_ready
-                
-                # 3. Update state if changed or timer just expired
-                if new_ready != slot.is_ready or timer_expired:
-                    slot.is_ready = new_ready
-                    self.state_changed.emit(name, new_ready, max_val)
-                    
             except Exception as exc:
                 payload = {"accepted": False, "reject_reason": f"detector_error:{type(exc).__name__}"}
                 slot.last_ocr_quality = payload
                 self.ocr_quality.emit(name, payload)
+                if not skill_recognition_updated:
+                    failed_ready = self._resolve_skill_recognition(slot, False)
+                    if failed_ready != slot.is_ready:
+                        slot.is_ready = failed_ready
+                        self.state_changed.emit(name, failed_ready, slot.last_similarity)
