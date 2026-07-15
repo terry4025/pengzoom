@@ -414,6 +414,10 @@ class CooldownServer(QObject):
 class CharacterProfileLookup(QObject):
     profile_loaded = pyqtSignal(int, dict)
     lookup_failed = pyqtSignal(int, str)
+    lookup_progress = pyqtSignal(int, str)
+
+    RETRY_TIMEOUTS = (15, 25, 25)
+    RETRY_DELAY_SECONDS = 1.5
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -448,28 +452,55 @@ class CharacterProfileLookup(QObject):
         return server_url
 
     def _lookup_worker(self, request_id, server_url, character_name):
-        try:
-            query = urllib.parse.urlencode({"name": character_name})
-            request = urllib.request.Request(
-                f"{server_url}/character?{query}",
-                headers={"Accept": "application/json"},
-                method="GET",
+        query = urllib.parse.urlencode({"name": character_name})
+        url = f"{server_url}/character?{query}"
+        last_error = None
+        for attempt, timeout_seconds in enumerate(self.RETRY_TIMEOUTS, start=1):
+            try:
+                if attempt > 1:
+                    self.lookup_progress.emit(
+                        request_id,
+                        f"자동 감지 서버 준비 중 · 자동 재시도 {attempt}/{len(self.RETRY_TIMEOUTS)}",
+                    )
+                request = urllib.request.Request(
+                    url,
+                    headers={"Accept": "application/json"},
+                    method="GET",
+                )
+                with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                if not isinstance(payload, dict) or not payload.get("character_class"):
+                    raise ValueError("invalid profile response")
+                payload["requested_name"] = character_name
+                self.profile_loaded.emit(request_id, payload)
+                return
+            except urllib.error.HTTPError as error:
+                last_error = error
+                # Render cold-start gateways can transiently return these codes.
+                if error.code not in (502, 503, 504) or attempt >= len(self.RETRY_TIMEOUTS):
+                    self.lookup_failed.emit(request_id, self._http_error_message(error))
+                    return
+            except (TimeoutError, socket.timeout, urllib.error.URLError) as error:
+                last_error = error
+                if attempt >= len(self.RETRY_TIMEOUTS):
+                    break
+            except Exception:
+                self.lookup_failed.emit(request_id, "캐릭터 정보를 확인하지 못했습니다.")
+                return
+
+            self.lookup_progress.emit(
+                request_id,
+                f"첫 응답이 늦어 서버를 깨우는 중 · 잠시 후 자동 재시도합니다 ({attempt}/{len(self.RETRY_TIMEOUTS)})",
             )
-            with urllib.request.urlopen(request, timeout=12) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            if not isinstance(payload, dict) or not payload.get("character_class"):
-                raise ValueError("invalid profile response")
-            payload["requested_name"] = character_name
-            self.profile_loaded.emit(request_id, payload)
-        except urllib.error.HTTPError as error:
-            message = self._http_error_message(error)
-            self.lookup_failed.emit(request_id, message)
-        except urllib.error.URLError:
-            self.lookup_failed.emit(request_id, "자동 감지 서버에 연결할 수 없습니다.")
-        except TimeoutError:
+            time.sleep(self.RETRY_DELAY_SECONDS)
+
+        if isinstance(last_error, (TimeoutError, socket.timeout)) or (
+            isinstance(last_error, urllib.error.URLError)
+            and isinstance(getattr(last_error, "reason", None), (TimeoutError, socket.timeout))
+        ):
             self.lookup_failed.emit(request_id, "캐릭터 조회 시간이 초과되었습니다.")
-        except Exception:
-            self.lookup_failed.emit(request_id, "캐릭터 정보를 확인하지 못했습니다.")
+        else:
+            self.lookup_failed.emit(request_id, "자동 감지 서버에 연결할 수 없습니다.")
 
     @staticmethod
     def _http_error_message(error):

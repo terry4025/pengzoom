@@ -2644,6 +2644,14 @@ class SettingsModal(QDialog):
         if should_connect:
             self._start_client_connection()
 
+    def on_character_lookup_progress(self, message):
+        if not self.character_lookup_in_progress:
+            return
+        self.lbl_character_lookup.setText(str(message))
+        self.lbl_character_lookup.setStyleSheet(
+            "color: #ffd60a; border: none; background: transparent; font-size: 12px; padding-left: 2px;"
+        )
+
     def on_character_lookup_failed(self, requested_name, message):
         if requested_name.casefold() != self.pending_lookup_name.casefold():
             return
@@ -3077,7 +3085,7 @@ class ResizableContainer(QFrame):
 class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('펭구 줌인 Pro v2.44')
+        self.setWindowTitle('펭구 줌인 Pro v2.45')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
@@ -3116,6 +3124,9 @@ class MagnifierWindow(QMainWindow):
         self.character_profile_lookup = network_manager.CharacterProfileLookup(self)
         self.character_profile_lookup.profile_loaded.connect(
             self.on_character_profile_loaded, Qt.ConnectionType.QueuedConnection
+        )
+        self.character_profile_lookup.lookup_progress.connect(
+            self.on_character_profile_progress, Qt.ConnectionType.QueuedConnection
         )
         self.character_profile_lookup.lookup_failed.connect(
             self.on_character_profile_failed, Qt.ConnectionType.QueuedConnection
@@ -3947,6 +3958,13 @@ class MagnifierWindow(QMainWindow):
         self.save_settings()
         if dialog and dialog.isVisible():
             dialog.on_character_lookup_succeeded(profile)
+
+    def on_character_profile_progress(self, request_id, message):
+        if request_id != self.active_character_lookup_request:
+            return
+        dialog = getattr(self, "config_dialog_ref", None)
+        if dialog and dialog.isVisible():
+            dialog.on_character_lookup_progress(message)
 
     def on_character_profile_failed(self, request_id, message):
         if request_id != self.active_character_lookup_request:
