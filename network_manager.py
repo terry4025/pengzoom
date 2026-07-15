@@ -424,13 +424,7 @@ class CooldownClient(QObject):
         self.class_name = class_name
         
         self.is_running = False
-        self.use_fallback = False
-        self.has_connected = False
         self.party_states = {}  # Local cache of the full party states dict
-        
-        # Urllib opener for HTTP fallback (bypasses system proxy to prevent 127.0.0.1 timeouts)
-        proxy_support = urllib.request.ProxyHandler({})
-        self.opener = urllib.request.build_opener(proxy_support)
         
         # Initialize QWebSocket
         self.ws = QWebSocket()
@@ -444,25 +438,17 @@ class CooldownClient(QObject):
         self.reconnect_timer.setInterval(3000)
         self.reconnect_timer.timeout.connect(self.connect_ws)
         
-        # HTTP Fallback timer
-        self.fallback_timer = QTimer(self)
-        self.fallback_timer.setInterval(1000)
-        self.fallback_timer.timeout.connect(self.poll_http)
-        
     def start(self):
         self.is_running = True
-        self.use_fallback = False
-        self.has_connected = False
         self.connect_ws()
         
     def stop(self):
         self.is_running = False
         self.reconnect_timer.stop()
-        self.fallback_timer.stop()
         self.ws.close()
         
     def connect_ws(self):
-        if not self.is_running or self.use_fallback:
+        if not self.is_running:
             return
         if self.ws.state() == QAbstractSocket.SocketState.UnconnectedState:
             ws_url = self.server_url
@@ -479,8 +465,6 @@ class CooldownClient(QObject):
             self.ws.open(QUrl(ws_url))
             
     def on_connected(self):
-        self.has_connected = True
-        self.use_fallback = False
         self.reconnect_timer.stop()
         self.connection_ok.emit()
         
@@ -495,26 +479,18 @@ class CooldownClient(QObject):
         self.ws.sendTextMessage(json.dumps(join_msg))
         
     def on_disconnected(self):
-        if self.is_running and not self.use_fallback:
+        if self.is_running:
             self.reconnect_timer.start()
             
     def on_error(self, error):
         error_str = self.ws.errorString()
-        # If we failed to connect initially (e.g. server returned 404 or connection refused), switch to HTTP fallback
-        if not self.has_connected and not self.use_fallback:
-            self.use_fallback = True
-            self.ws.close()
-            self.reconnect_timer.stop()
-            self.fallback_timer.start()
-            self.connection_failed.emit("웹소켓 연결 실패. HTTP 폴링 모드로 전환합니다.")
-        else:
-            self.connection_failed.emit(f"웹소켓 에러: {error_str}")
+        self.connection_failed.emit(f"웹소켓 에러: {error_str}")
             
     def send_update(self, skill_name, is_ready, cooldown_duration=0):
         if not self.is_running:
             return
             
-        if not self.use_fallback and self.ws.state() == QAbstractSocket.SocketState.ConnectedState:
+        if self.ws.state() == QAbstractSocket.SocketState.ConnectedState:
             update_msg = {
                 "action": "update",
                 "room_id": self.room_id,
@@ -529,34 +505,6 @@ class CooldownClient(QObject):
                 self.ws.sendTextMessage(json.dumps(update_msg))
             except Exception as e:
                 self.connection_failed.emit(f"웹소켓 전송 실패: {str(e)}")
-        else:
-            # Fallback to HTTP POST
-            def _send():
-                url = f"{self.server_url}/update"
-                data = json.dumps({
-                    "room_id": self.room_id,
-                    "player": self.player_name,
-                    "client_id": self.client_id,
-                    "class_name": self.class_name,
-                    "skill": skill_name,
-                    "is_ready": is_ready,
-                    "cooldown_duration": cooldown_duration
-                }).encode("utf-8")
-                
-                try:
-                    req = urllib.request.Request(
-                        url, 
-                        data=data, 
-                        headers={'Content-Type': 'application/json'},
-                        method="POST"
-                    )
-                    with self.opener.open(req, timeout=2.0) as res:
-                        res.read()
-                except Exception as e:
-                    error_msg = f"HTTP 업데이트 실패: {str(e)}"
-                    QTimer.singleShot(0, lambda msg=error_msg: self.connection_failed.emit(msg))
-                    
-            threading.Thread(target=_send, daemon=True).start()
             
     def on_message_received(self, message):
         try:
@@ -595,48 +543,10 @@ class CooldownClient(QObject):
                     
                 self.status_updated.emit(self.party_states)
                 self.connection_ok.emit()
+            elif msg_type == "remove":
+                player = data.get("player")
+                if player:
+                    self.party_states.pop(player, None)
+                    self.status_updated.emit(self.party_states)
         except Exception as e:
-            pass
-            
-    def poll_http(self):
-        if not self.is_running or not self.use_fallback:
-            return
-            
-        def _poll():
-            import urllib.parse
-            quoted_room = urllib.parse.quote(self.room_id)
-            url = f"{self.server_url}/status?room_id={quoted_room}"
-            try:
-                req = urllib.request.Request(url, method="GET")
-                with self.opener.open(req, timeout=2.0) as res:
-                    raw_data = json.loads(res.read().decode("utf-8"))
-                    
-                    if isinstance(raw_data, dict) and "states" in raw_data:
-                        server_time = raw_data.get("server_time", time.time())
-                        states = raw_data.get("states", {})
-                    else:
-                        server_time = time.time()
-                        states = raw_data if isinstance(raw_data, dict) else {}
-                        
-                    time_offset = time.time() - server_time
-                    for player, skills in states.items():
-                        if isinstance(skills, dict):
-                            for skill, info in skills.items():
-                                if isinstance(info, dict) and "timestamp" in info:
-                                    info["timestamp"] = info["timestamp"] + time_offset
-                                    
-                    self.party_states = states
-                    # Marshal signal emissions to main thread via QTimer to prevent crash
-                    QTimer.singleShot(0, lambda: self._emit_poll_results())
-            except Exception as e:
-                error_msg = f"상태 가져오기 실패 (HTTP): {str(e)}"
-                QTimer.singleShot(0, lambda msg=error_msg: self.connection_failed.emit(msg))
-                
-        threading.Thread(target=_poll, daemon=True).start()
-
-    def _emit_poll_results(self):
-        try:
-            self.status_updated.emit(self.party_states)
-            self.connection_ok.emit()
-        except Exception:
             pass

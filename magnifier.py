@@ -10,6 +10,7 @@ import threading  # Asynchronous threading to prevent mouse lagging
 import traceback  # Traceback debugging helper to capture exact popup crashes
 import base64
 import atexit
+import urllib.request
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout, 
                              QHBoxLayout, QWidget, QFrame, QPushButton, QSlider, 
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
@@ -444,6 +445,9 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # Set of class keys that failed to download — skip retry within same session
 _icon_download_failed = set()
+_icon_download_in_progress = set()
+_icon_download_callbacks = {}
+_icon_download_lock = threading.Lock()
 
 def get_class_icon(class_name):
     base_key = LOST_ARK_CLASSES.get(class_name, "holyknight")
@@ -474,12 +478,27 @@ def get_class_icon(class_name):
         return None
 
 def get_class_icon_async(class_name, callback):
-    """Download class icon in background thread, call callback(path_or_None) on main thread."""
+    """Download once per class and deliver every waiting callback when it completes."""
+    base_key = LOST_ARK_CLASSES.get(class_name, "holyknight")
+    with _icon_download_lock:
+        if base_key in _icon_download_failed:
+            callback(None)
+            return
+        _icon_download_callbacks.setdefault(base_key, []).append(callback)
+        if base_key in _icon_download_in_progress:
+            return
+        _icon_download_in_progress.add(base_key)
+
     def _worker():
-        path = get_class_icon(class_name)
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(0, lambda: callback(path))
-    import threading
+        try:
+            path = get_class_icon(class_name)
+        finally:
+            with _icon_download_lock:
+                callbacks = _icon_download_callbacks.pop(base_key, [])
+                _icon_download_in_progress.discard(base_key)
+        for waiting_callback in callbacks:
+            waiting_callback(path)
+
     threading.Thread(target=_worker, daemon=True).start()
 
 # Preset Styling Themes for Party Overlay
@@ -621,6 +640,8 @@ class GlowDot(QWidget):
         painter.drawEllipse(center, int(base_rad), int(base_rad))
 
 class PartyPanel(QWidget):
+    icon_downloaded = pyqtSignal(object, object)
+
     def __init__(self, parent=None):
         super().__init__()
         self.parent_window = parent
@@ -639,6 +660,7 @@ class PartyPanel(QWidget):
         self.speed = 1.0
         self.intensity = 1.0
         self.player_classes = {}
+        self.icon_downloaded.connect(self._deliver_downloaded_icon)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -673,6 +695,13 @@ class PartyPanel(QWidget):
         
         self.update_theme_styles()
         self.apply_theme()
+
+    def _deliver_downloaded_icon(self, path, callback):
+        try:
+            callback(path)
+        except RuntimeError:
+            # The player card can disappear before its background download ends.
+            pass
         
     def update_theme_styles(self):
         theme = THEMES[self.theme_name]
@@ -720,7 +749,6 @@ class PartyPanel(QWidget):
             self.update_states(self.parent_window.client.party_states)
             
     def update_states(self, party_states):
-        import urllib.request
         current_players = set(party_states.keys())
         
         # Remove old players
@@ -799,7 +827,10 @@ class PartyPanel(QWidget):
                 _apply_icon(cached_path)
             else:
                 p_data["icon_lbl"].setStyleSheet("background-color: rgba(255, 255, 255, 0.05); border-radius: 9px;")
-                get_class_icon_async(class_name, _apply_icon)
+                get_class_icon_async(
+                    class_name,
+                    lambda path, apply_icon=_apply_icon: self.icon_downloaded.emit(path, apply_icon)
+                )
                 
             for s in list(p_data["skill_widgets"].keys()):
                 if s not in skills:
