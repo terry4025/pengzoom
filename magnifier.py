@@ -30,10 +30,15 @@ import cooldown_detector
 import network_manager
 from capture_overlay import CaptureOverlay
 
+# 앱 버전. 창 제목/브랜드 배지/AppUserModelID/빌드 산출물 이름이 모두 이 값을
+# 따른다. 이전에는 문자열이 흩어져 있어 한쪽만 올라가는 일이 있었다.
+APP_VERSION = "2.47"
+APP_NAME = "펭구 줌인"
+
 # Set explicit AppUserModelID on Windows to fix Taskbar Icon grouping and display issues
 import ctypes
 try:
-    myappid = 'terry4025.pengzoom.magnifier.2.0'
+    myappid = f'terry4025.pengzoom.magnifier.{APP_VERSION}'
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 except Exception:
     pass
@@ -837,6 +842,8 @@ class PartyPanel(QWidget):
         self._content_height = 0
         self._min_content_width = 0
         self._autofitting = False
+        # 사용자가 직접 크기를 조절했는지. True면 자동 맞춤이 축소하지 않는다.
+        self._user_sized = False
         self._pulse_origin = time.monotonic()
 
         self.resize(272, 210)
@@ -999,12 +1006,20 @@ class PartyPanel(QWidget):
             self._min_content_width = int(math.ceil(210 * scale))
 
     def _autofit_size(self):
-        """내용에 맞춰 높이를 맞추고, 폭은 최소 가독 폭까지만 넓힌다."""
+        """내용이 잘리지 않을 최소 크기를 보장한다.
+
+        사용자가 직접 크기를 조절한 뒤에는(_user_sized) 절대 축소하지 않고,
+        내용이 현재 크기보다 커질 때만 늘린다. 초기 상태에서는 카드 수에 맞춰
+        높이를 정확히 맞춰 준다.
+        """
         if self._autofitting:
             return
-        target_h = self._content_height
         target_w = max(self.width(), self._min_content_width)
-        if abs(self.height() - target_h) <= 1 and target_w == self.width():
+        if self._user_sized:
+            target_h = max(self.height(), self._content_height)
+        else:
+            target_h = self._content_height
+        if target_w == self.width() and abs(self.height() - target_h) <= 1:
             return
         self._autofitting = True
         try:
@@ -1592,15 +1607,91 @@ class PartyPanel(QWidget):
             self.update()
         super().leaveEvent(event)
 
-    def _near_right_edge(self, pos):
-        return pos.x() >= self.width() - self.resize_border
+    # 리사이즈 방향 -> 커서 매핑. 모서리는 대각 커서를 준다.
+    _RESIZE_CURSORS = {
+        "Left": Qt.CursorShape.SizeHorCursor,
+        "Right": Qt.CursorShape.SizeHorCursor,
+        "Top": Qt.CursorShape.SizeVerCursor,
+        "Bottom": Qt.CursorShape.SizeVerCursor,
+        "TopLeft": Qt.CursorShape.SizeFDiagCursor,
+        "BottomRight": Qt.CursorShape.SizeFDiagCursor,
+        "TopRight": Qt.CursorShape.SizeBDiagCursor,
+        "BottomLeft": Qt.CursorShape.SizeBDiagCursor,
+    }
+
+    def _resize_zone(self, pos):
+        """커서 위치가 어느 리사이즈 영역인지 판정한다.
+
+        네 변과 네 모서리를 모두 지원한다. 모서리 히트박스를 변보다 넓게 잡아야
+        실제로 집기 쉬우므로 corner를 우선 판정한다.
+        """
+        border = self.resize_border
+        corner = border + 6
+        width, height = self.width(), self.height()
+        x, y = pos.x(), pos.y()
+
+        near_left = x <= border
+        near_right = x >= width - border
+        near_top = y <= border
+        near_bottom = y >= height - border
+
+        corner_left = x <= corner
+        corner_right = x >= width - corner
+        corner_top = y <= corner
+        corner_bottom = y >= height - corner
+
+        if corner_top and corner_left:
+            return "TopLeft"
+        if corner_top and corner_right:
+            return "TopRight"
+        if corner_bottom and corner_left:
+            return "BottomLeft"
+        if corner_bottom and corner_right:
+            return "BottomRight"
+        if near_left:
+            return "Left"
+        if near_right:
+            return "Right"
+        if near_top:
+            return "Top"
+        if near_bottom:
+            return "Bottom"
+        return None
+
+    def _apply_resize(self, zone, global_pos):
+        """드래그 중인 방향에 맞춰 지오메트리를 갱신한다.
+
+        좌/상단을 잡으면 창 위치까지 움직여야 반대편 변이 고정된 것처럼 보인다.
+        높이를 사용자가 직접 조절할 수 있어야 하므로, 내용 기반 자동 맞춤은
+        '최소 높이'로만 작동한다(_user_sized 플래그).
+        """
+        geometry = self.geometry()
+        min_w = max(160, self._min_content_width)
+        min_h = max(90, self._content_height)
+
+        left, top = geometry.left(), geometry.top()
+        right, bottom = geometry.right(), geometry.bottom()
+
+        if "Left" in zone:
+            left = min(global_pos.x(), right - min_w + 1)
+        if "Right" in zone:
+            right = max(global_pos.x(), left + min_w - 1)
+        if "Top" in zone:
+            top = min(global_pos.y(), bottom - min_h + 1)
+        if "Bottom" in zone:
+            bottom = max(global_pos.y(), top + min_h - 1)
+
+        self._user_sized = True
+        self.setGeometry(QRect(QPoint(left, top), QPoint(right, bottom)))
 
     def mousePressEvent(self, event):
         if self.panel_click_through:
             return
         if event.button() == Qt.MouseButton.LeftButton:
-            if self._near_right_edge(event.position().toPoint()):
-                self.resize_dir = "Right"
+            zone = self._resize_zone(event.position().toPoint())
+            if zone:
+                self.resize_dir = zone
+                self.drag_position = None
             else:
                 self.resize_dir = None
                 self.drag_position = (event.globalPosition().toPoint()
@@ -1609,16 +1700,15 @@ class PartyPanel(QWidget):
     def mouseMoveEvent(self, event):
         if self.panel_click_through:
             return
-        # 높이는 카드 수에 맞춰 자동 조절되므로 사용자는 폭만 조절한다.
         if event.buttons() == Qt.MouseButton.NoButton:
-            self.setCursor(Qt.CursorShape.SizeHorCursor
-                           if self._near_right_edge(event.position().toPoint())
-                           else Qt.CursorShape.ArrowCursor)
+            # 호버만으로 어느 방향으로 늘릴 수 있는지 커서로 알려준다.
+            zone = self._resize_zone(event.position().toPoint())
+            self.setCursor(self._RESIZE_CURSORS.get(zone, Qt.CursorShape.SizeAllCursor)
+                           if zone else Qt.CursorShape.SizeAllCursor)
         elif event.buttons() == Qt.MouseButton.LeftButton:
             global_pos = event.globalPosition().toPoint()
-            if self.resize_dir == "Right":
-                self.resize(max(self._min_content_width, global_pos.x() - self.x()),
-                            self.height())
+            if self.resize_dir:
+                self._apply_resize(self.resize_dir, global_pos)
             elif self.drag_position is not None:
                 self.move(global_pos - self.drag_position)
 
@@ -3577,7 +3667,7 @@ class ResizableContainer(QFrame):
 class MagnifierWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('펭구 줌인 Pro v2.46')
+        self.setWindowTitle(f'{APP_NAME} Pro v{APP_VERSION}')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
                             Qt.WindowType.Window)
@@ -3786,9 +3876,10 @@ class MagnifierWindow(QMainWindow):
                     
                     party_size = data.get('party_panel_size', None)
                     if party_size and len(party_size) == 2 and self.party_panel:
-                        # 높이는 카드 수에 따라 자동 계산되므로 폭만 복원한다.
-                        # (저장 포맷은 하위호환을 위해 [w, h] 그대로 유지)
-                        self.party_panel.resize(party_size[0], self.party_panel.height())
+                        # 사용자가 조절한 크기를 그대로 복원한다. _user_sized를
+                        # 세워 두면 내용 기반 자동 맞춤이 이 크기를 줄이지 않는다.
+                        self.party_panel.resize(party_size[0], party_size[1])
+                        self.party_panel._user_sized = True
                         
                     party_opacity = data.get('party_panel_opacity', 90)
                     if self.party_panel:
@@ -4130,7 +4221,7 @@ class MagnifierWindow(QMainWindow):
         brand_name.setObjectName("BrandName")
         top_bar_layout.addWidget(brand_name)
 
-        brand_version = QLabel("PRO 2.46")
+        brand_version = QLabel(f"PRO {APP_VERSION}")
         brand_version.setObjectName("BrandVersion")
         top_bar_layout.addWidget(brand_version)
 
@@ -4884,31 +4975,68 @@ class MagnifierWindow(QMainWindow):
             pass
         super().closeEvent(event)
 
+def get_own_process_names():
+    """현재 실행 형태에 해당하는 프로세스 이름 후보를 돌려준다.
+
+    기존 구현은 "펭구 줌인 Pro" 문자열을 하드코딩했는데, 실제 산출물 이름은
+    "펭구 줌인 2.47 Pro.exe"라 부분 문자열이 일치하지 않았다. 그래서 중복 인스턴스
+    정리가 한 번도 동작하지 않았고, 두 번 실행하면 전역 훅이 두 벌 걸렸다.
+    이제 sys.executable 이름에서 직접 유도해 이름을 바꿔도 따라간다.
+    """
+    names = set()
+    try:
+        exe_name = os.path.basename(sys.executable or "")
+        if exe_name:
+            names.add(exe_name.lower())
+    except Exception:
+        pass
+    # 하위호환: 과거 배포본 이름들
+    names.update({"pengzoompro.exe", "펭구 줌인 pro.exe"})
+    return names
+
+
 def kill_zombie_processes():
+    """이전 인스턴스를 정리한다(크래시 후 남은 프로세스 포함).
+
+    PyInstaller onefile은 부트로더 부모와 실제 앱 자식이 같은 이름을 갖는다.
+    부모를 죽이면 자신이 함께 내려가므로 조상 PID는 건드리지 않는다.
+    """
     try:
         import psutil
-        import os
+    except ImportError:
+        return
+
+    try:
         current_pid = os.getpid()
+        current = psutil.Process(current_pid)
+        # 자기 자신과 조상(onefile 부트로더 부모 포함)은 대상에서 제외한다.
+        protected = {current_pid}
+        try:
+            for parent in current.parents():
+                protected.add(parent.pid)
+        except Exception:
+            pass
+
+        frozen = getattr(sys, 'frozen', False)
+        own_names = get_own_process_names()
+
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
                 pid = proc.info['pid']
-                if pid == current_pid:
+                if pid in protected:
                     continue
-                
-                is_target = False
-                name = proc.info['name']
+
+                name = (proc.info['name'] or "").lower()
                 cmdline = proc.info['cmdline'] or []
-                
-                if name:
-                    if "펭구 줌인 Pro" in name or "PengZoomPro" in name:
-                        is_target = True
-                    elif "python" in name.lower():
-                        if any("magnifier.py" in arg for arg in cmdline):
-                            is_target = True
-                            
+
+                if frozen:
+                    is_target = name in own_names
+                else:
+                    is_target = ("python" in name
+                                 and any("magnifier.py" in arg for arg in cmdline))
+
                 if is_target:
-                    p = psutil.Process(pid)
-                    p.terminate()
+                    psutil.Process(pid).terminate()
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
     except Exception:
