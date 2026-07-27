@@ -50,6 +50,12 @@ def main():
                           and not window.label.pixmap().isNull())
             print(f"[render] update_magnifier frames = {result['frames']}")
             print(f"[render] viewport pixmap set     = {has_pixmap}")
+            # 핫 패스 예외는 삼켜지므로 카운터로 확인한다.
+            print(f"[render] frame_error_count       = {window.frame_error_count}")
+            if window.last_frame_error:
+                print("[render] first frame error:")
+                print(window.last_frame_error)
+                result["error"] = window.last_frame_error
             if has_pixmap:
                 out = os.path.join(OUT_DIR, "V_smoke_viewport.png")
                 window.label.pixmap().save(out, "PNG")

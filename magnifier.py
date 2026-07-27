@@ -844,9 +844,10 @@ class PartyPanel(QWidget):
         self._relayout()
 
         # 패널 전체를 구동하는 단일 타이머. 파티원 수와 무관하게 1개다.
+        # 실제 시작은 showEvent에서 한다. 한 번도 표시되지 않은 패널이 프레임을
+        # 돌릴 이유가 없고, hideEvent가 다시 멈춘다.
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick_timers)
-        self.timer.start(HUD_FRAME_INTERVAL_MS)
 
     # ---------------------------------------------------------------- 테마
     def _refresh_palette(self):
@@ -3650,6 +3651,10 @@ class MagnifierWindow(QMainWindow):
         force_set_window_icon(int(self.winId()))
         
         self.sct = mss.mss()
+        # update_magnifier는 핫 패스라 예외를 잡아 넘기지만, 첫 실패는 보관해
+        # 원인 추적이 가능하게 한다.
+        self.last_frame_error = None
+        self.frame_error_count = 0
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_magnifier)
         self.timer.start(16)
@@ -3781,7 +3786,9 @@ class MagnifierWindow(QMainWindow):
                     
                     party_size = data.get('party_panel_size', None)
                     if party_size and len(party_size) == 2 and self.party_panel:
-                        self.party_panel.resize(party_size[0], party_size[1])
+                        # 높이는 카드 수에 따라 자동 계산되므로 폭만 복원한다.
+                        # (저장 포맷은 하위호환을 위해 [w, h] 그대로 유지)
+                        self.party_panel.resize(party_size[0], self.party_panel.height())
                         
                     party_opacity = data.get('party_panel_opacity', 90)
                     if self.party_panel:
@@ -4737,7 +4744,11 @@ class MagnifierWindow(QMainWindow):
                 
             self.label.setPixmap(pixmap)
         except Exception:
-            pass
+            # 핫 패스라 매 프레임 로그를 남길 수는 없다. 다만 통째로 삼키면
+            # 프레임 드롭 원인을 추적할 수 없으므로 첫 실패만 보관해 둔다.
+            self.frame_error_count += 1
+            if self.last_frame_error is None:
+                self.last_frame_error = traceback.format_exc()
 
     def get_display_text(self, val, fallback):
         return val if val else fallback
