@@ -3,9 +3,9 @@ import os
 import json
 import time
 import math
+import re
 import mss
 import numpy as np
-import winsound  # Win32 system sound for cooldown alerts
 import threading  # Asynchronous threading to prevent mouse lagging
 import traceback  # Traceback debugging helper to capture exact popup crashes
 import base64
@@ -16,12 +16,13 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout,
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
                              QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
                              QCheckBox, QSpinBox, QComboBox, QDoubleSpinBox)
-from PyQt6.QtCore import QTimer, Qt, QPoint, QRect, pyqtSignal, QObject, QSize, QPropertyAnimation, QEasingCurve, QEvent
-from PyQt6.QtGui import QImage, QPixmap, QCursor, QPainter, QPen, QColor, QIcon, QKeySequence, QWheelEvent, QFont, QBrush
+from PyQt6.QtCore import (QTimer, Qt, QPoint, QPointF, QRect, QRectF, pyqtSignal, QObject,
+                          QSize, QPropertyAnimation, QEasingCurve)
+from PyQt6.QtGui import (QImage, QPixmap, QCursor, QPainter, QPainterPath, QPen, QColor,
+                         QIcon, QKeySequence, QWheelEvent, QFont, QFontMetrics, QBrush)
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
-from PIL import Image
-from pynput import keyboard, mouse
+from pynput import keyboard
 import cv2
 
 # Import our custom modules
@@ -1157,6 +1158,37 @@ class PartyPanel(QWidget):
         if self.parent_window:
             self.parent_window.save_settings()
         super().closeEvent(event)
+
+
+def scale_bgra_frame_to_qimage(bgra_bytes, src_w, src_h, view_w, view_h):
+    """mss의 BGRA 버퍼를 nearest-neighbor로 확대해 QImage로 변환한다.
+
+    v2.46 이전에는 PIL로 frombytes -> resize -> convert('RGBA') -> tobytes를
+    거쳐 프레임마다 대형 버퍼를 4번 할당했다. 60fps에서 임시 메모리 처리량이
+    수백 MB/s에 달해 GC 부담이 컸다. 여기서는 numpy 인덱싱 한 번으로 끝낸다.
+
+    QImage는 전달된 버퍼를 복사하지 않으므로, 호출측이 QPixmap으로 변환하기
+    전까지 살아 있어야 하는 numpy 배열을 함께 돌려준다.
+
+    Returns:
+        (QImage, numpy.ndarray) 또는 유효하지 않은 입력이면 (None, None)
+    """
+    if src_w <= 0 or src_h <= 0 or view_w <= 0 or view_h <= 0:
+        return None, None
+
+    frame = np.frombuffer(bgra_bytes, dtype=np.uint8).reshape(src_h, src_w, 4)
+
+    # 정수 인덱스 매핑. PIL의 Resampling.NEAREST와 동일하게 출력 픽셀의
+    # '중심'을 원본으로 되돌려 샘플링한다((i + 0.5) * src / view).
+    # 좌상단 편향을 막기 위해 floor(i * src / view)를 쓰지 않는다.
+    rows = ((np.arange(view_h, dtype=np.int64) * 2 + 1) * src_h) // (view_h * 2)
+    cols = ((np.arange(view_w, dtype=np.int64) * 2 + 1) * src_w) // (view_w * 2)
+
+    # mss의 알파 채널은 신뢰할 수 없다. BGR 3채널만 넘기면 채널 스왑도 생략된다.
+    buffer = np.ascontiguousarray(frame[rows[:, None], cols[None, :], :3])
+    image = QImage(buffer.data, view_w, view_h, buffer.strides[0],
+                   QImage.Format.Format_BGR888)
+    return image, buffer
 
 
 class PartyOverlaySettingsModal(QDialog):
@@ -3151,7 +3183,19 @@ class MagnifierWindow(QMainWindow):
             self.key_listener = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
             self.key_listener.start()
         except Exception:
+            self.key_listener = None
+
+    def stop_listeners(self):
+        """pynput 리스너를 정리한다. 호출하지 않으면 종료 후에도 윈도우
+        키보드 훅과 데몬 스레드가 남는다."""
+        listener = getattr(self, 'key_listener', None)
+        if listener is None:
+            return
+        try:
+            listener.stop()
+        except Exception:
             pass
+        self.key_listener = None
 
     def pause_listeners(self):
         # We don't recreate listeners anymore, preventing PySide/PyQt cross-thread crashes!
@@ -4152,14 +4196,15 @@ class MagnifierWindow(QMainWindow):
             
             # Safe screen grab of strictly inner monitor coordinates
             sct_img = self.sct.grab(monitor)
-            img = Image.frombytes('RGB', sct_img.size, sct_img.bgra, 'raw', 'BGRX')
-            
-            img = img.resize((view_w, view_h), Image.Resampling.NEAREST)
-            img = img.convert('RGBA')
-            data = img.tobytes('raw', 'RGBA')
-            
-            qimg = QImage(data, view_w, view_h, QImage.Format.Format_RGBA8888)
+
+            src_w, src_h = sct_img.size
+            qimg, frame_buffer = scale_bgra_frame_to_qimage(
+                sct_img.bgra, src_w, src_h, view_w, view_h)
+            if qimg is None:
+                return
             pixmap = QPixmap.fromImage(qimg)
+            # QPixmap이 픽셀을 복사한 뒤에야 numpy 버퍼를 놓아준다.
+            del frame_buffer
             
             # Draw targeting crosshair
             if self.follow_mouse:
@@ -4297,11 +4342,24 @@ class MagnifierWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.save_settings()
+        # 렌더 타이머를 먼저 멈춰야 아래에서 mss를 닫은 뒤 update_magnifier가
+        # 이미 닫힌 핸들로 grab을 시도하지 않는다.
+        try:
+            self.timer.stop()
+            self.party_sync_timer.stop()
+        except Exception:
+            pass
         self.detector.stop_detection()
         self.stop_party_server()
         self.stop_party_client()
         self.party_panel.close()
-        self.pause_listeners()
+        self.stop_listeners()
+        # mss는 GDI 리소스를 잡고 있어 명시적으로 닫지 않으면 장시간 구동 시
+        # 핸들이 누적된다.
+        try:
+            self.sct.close()
+        except Exception:
+            pass
         super().closeEvent(event)
 
 def kill_zombie_processes():
