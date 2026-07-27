@@ -104,7 +104,45 @@ def lookup_character_profile(character_name):
         CHARACTER_PROFILE_CACHE[cache_key] = (now, profile)
     return profile
 
-def read_ws_frame(rfile):
+# 프레임/요청 크기 상한. 파티 상태 메시지는 실제로 수백 바이트 수준이므로
+# 정상 트래픽에는 영향이 없다. 상한이 없으면 64비트 길이 필드에 수 GB를 넣은
+# 단일 프레임으로 릴레이 서버 메모리를 고갈시킬 수 있다.
+MAX_WS_PAYLOAD_BYTES = 64 * 1024
+MAX_HTTP_BODY_BYTES = 64 * 1024
+MAX_ROOM_ID_LEN = 64
+MAX_PLAYER_NAME_LEN = 64
+MAX_SKILL_NAME_LEN = 64
+MAX_CLASS_NAME_LEN = 32
+MAX_CLIENT_ID_LEN = 64
+
+
+def sanitize_token(value, max_len, fallback=None):
+    """room_id / player / skill 등 식별자를 타입과 길이 기준으로 정규화한다.
+
+    비정상 값이면 fallback을 반환한다(fallback이 None이면 거부를 의미).
+    소유권 검사는 이미 client_id 기반으로 존재하지만, 길이 제한이 없어 거대한
+    문자열을 키로 밀어 넣어 방 상태를 부풀릴 수 있었다.
+    """
+    if not isinstance(value, str):
+        return fallback
+    trimmed = value.strip()
+    if not trimmed or len(trimmed) > max_len:
+        return fallback
+    return trimmed
+
+
+def coerce_cooldown_duration(value):
+    """쿨타임 값을 0~24시간 범위의 실수로 강제한다(NaN/Inf 차단)."""
+    try:
+        seconds = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if seconds != seconds or seconds in (float("inf"), float("-inf")):
+        return 0.0
+    return max(0.0, min(86400.0, seconds))
+
+
+def read_ws_frame(rfile, max_payload=MAX_WS_PAYLOAD_BYTES):
     first_byte = rfile.read(1)
     if not first_byte:
         return None, None
@@ -128,7 +166,12 @@ def read_ws_frame(rfile):
         if len(len_bytes) < 8:
             return None, None
         payload_len = int.from_bytes(len_bytes, byteorder='big')
-        
+
+    # 상한 초과 프레임은 읽지 않고 연결을 끊는다. read()를 호출하는 순간
+    # 선언된 길이만큼 버퍼를 할당하므로 반드시 할당 전에 걸러야 한다.
+    if payload_len > max_payload:
+        return None, None
+
     masking_key = b""
     if is_masked:
         masking_key = rfile.read(4)
@@ -294,10 +337,13 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
                     
                     action = msg.get("action")
                     if action == "join":
-                        room_id = msg.get("room_id", "default")
-                        player_name = msg.get("player", "unknown")
-                        client_id = msg.get("client_id")
-                        class_name = msg.get("class_name", "홀리나이트")
+                        room_id = sanitize_token(msg.get("room_id", "default"),
+                                                 MAX_ROOM_ID_LEN, "default")
+                        player_name = sanitize_token(msg.get("player", "unknown"),
+                                                     MAX_PLAYER_NAME_LEN, "unknown")
+                        client_id = sanitize_token(msg.get("client_id"), MAX_CLIENT_ID_LEN)
+                        class_name = sanitize_token(msg.get("class_name", "홀리나이트"),
+                                                    MAX_CLASS_NAME_LEN, "홀리나이트")
                         
                         register_client_player(room_id, client_id, player_name, self)
                         connection_client_id = client_id
@@ -326,15 +372,17 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
                             send_ws_message(self.wfile, json.dumps(join_response))
                             
                     elif action == "update":
-                        room_id = msg.get("room_id", "default")
-                        player = msg.get("player")
-                        client_id = msg.get("client_id")
-                        class_name = msg.get("class_name", "홀리나이트")
-                        skill = msg.get("skill")
-                        is_ready = msg.get("is_ready")
-                        cooldown_duration = msg.get("cooldown_duration", 0)
+                        room_id = sanitize_token(msg.get("room_id", "default"),
+                                                 MAX_ROOM_ID_LEN, "default")
+                        player = sanitize_token(msg.get("player"), MAX_PLAYER_NAME_LEN)
+                        client_id = sanitize_token(msg.get("client_id"), MAX_CLIENT_ID_LEN)
+                        class_name = sanitize_token(msg.get("class_name", "홀리나이트"),
+                                                    MAX_CLASS_NAME_LEN, "홀리나이트")
+                        skill = sanitize_token(msg.get("skill"), MAX_SKILL_NAME_LEN)
+                        is_ready = bool(msg.get("is_ready"))
+                        cooldown_duration = coerce_cooldown_duration(msg.get("cooldown_duration", 0))
                         
-                        if player and skill is not None:
+                        if player and skill:
                             with STATE_LOCK:
                                 # A replaced/older socket must never restore its old name.
                                 if player != player_name or client_id != connection_client_id:
@@ -362,10 +410,11 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
                                     "state": PARTY_STATES[room_id][player][skill]
                                 })
                     elif action == "class":
-                        room_id = msg.get("room_id", "default")
-                        player = msg.get("player")
-                        client_id = msg.get("client_id")
-                        class_name = msg.get("class_name")
+                        room_id = sanitize_token(msg.get("room_id", "default"),
+                                                 MAX_ROOM_ID_LEN, "default")
+                        player = sanitize_token(msg.get("player"), MAX_PLAYER_NAME_LEN)
+                        client_id = sanitize_token(msg.get("client_id"), MAX_CLIENT_ID_LEN)
+                        class_name = sanitize_token(msg.get("class_name"), MAX_CLASS_NAME_LEN)
 
                         if player and class_name:
                             with STATE_LOCK:

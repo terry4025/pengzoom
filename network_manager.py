@@ -16,7 +16,41 @@ from PyQt6.QtNetwork import QAbstractSocket
 STATE_LOCK = threading.Lock()
 WEBSOCKET_CLIENTS = {}  # { room_id: set(handler) }
 
-def read_ws_frame(rfile):
+# 프레임/요청 크기 상한. 파티 상태 메시지는 실제로 수백 바이트 수준이므로
+# 넉넉하게 잡아도 정상 트래픽에는 영향이 없다. 상한이 없으면 64비트 길이
+# 필드에 수 GB를 넣은 단일 프레임으로 서버 메모리를 고갈시킬 수 있다.
+MAX_WS_PAYLOAD_BYTES = 64 * 1024
+MAX_HTTP_BODY_BYTES = 64 * 1024
+MAX_ROOM_ID_LEN = 64
+MAX_PLAYER_NAME_LEN = 64
+MAX_SKILL_NAME_LEN = 64
+
+
+def sanitize_token(value, max_len, fallback=None):
+    """room_id / player / skill 같은 식별자를 길이와 타입 기준으로 정규화한다.
+
+    비정상 값이면 fallback을 반환한다(fallback이 None이면 거부를 의미).
+    """
+    if not isinstance(value, str):
+        return fallback
+    trimmed = value.strip()
+    if not trimmed or len(trimmed) > max_len:
+        return fallback
+    return trimmed
+
+
+def coerce_cooldown_duration(value):
+    """쿨타임 값을 0~24시간 범위의 실수로 강제한다."""
+    try:
+        seconds = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if seconds != seconds or seconds in (float("inf"), float("-inf")):
+        return 0.0
+    return max(0.0, min(86400.0, seconds))
+
+
+def read_ws_frame(rfile, max_payload=MAX_WS_PAYLOAD_BYTES):
     first_byte = rfile.read(1)
     if not first_byte:
         return None, None
@@ -40,7 +74,12 @@ def read_ws_frame(rfile):
         if len(len_bytes) < 8:
             return None, None
         payload_len = int.from_bytes(len_bytes, byteorder='big')
-        
+
+    # 상한을 넘는 프레임은 읽지 않고 연결을 끊는다. read()를 시도하는 순간
+    # 선언된 길이만큼 버퍼를 할당하게 되므로 반드시 할당 전에 걸러야 한다.
+    if payload_len > max_payload:
+        return None, None
+
     masking_key = b""
     if is_masked:
         masking_key = rfile.read(4)
@@ -89,61 +128,90 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Mute console logging to keep execution clean
         pass
-        
+
+    def _read_json_body(self):
+        """Content-Length를 검증한 뒤 본문을 JSON으로 파싱한다.
+
+        이전에는 선언된 Content-Length를 그대로 신뢰해 rfile.read()에 넘겼다.
+        따라서 임의 클라이언트가 거대한 길이를 선언해 메모리를 고갈시킬 수
+        있었다. 이제 상한을 넘으면 413으로 거절한다.
+
+        Returns:
+            (dict, None) 또는 (None, 상태코드)
+        """
+        try:
+            content_length = int(self.headers.get('Content-Length', 0) or 0)
+        except (TypeError, ValueError):
+            return None, 400
+        if content_length < 0:
+            return None, 400
+        if content_length > MAX_HTTP_BODY_BYTES:
+            return None, 413
+        if content_length == 0:
+            return {}, None
+        raw = self.rfile.read(content_length)
+        if len(raw) < content_length:
+            return None, 400
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return None, 400
+        if not isinstance(parsed, dict):
+            return None, 400
+        return parsed, None
+
+    def _send_json(self, status, payload_bytes):
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(payload_bytes)
+
     def do_POST(self):
         try:
             if self.path == "/update":
-                content_length = int(self.headers.get('Content-Length', 0))
-                post_data = self.rfile.read(content_length)
-                data = json.loads(post_data.decode("utf-8"))
-                
-                room_id = data.get("room_id", "default")
-                player = data.get("player")
-                skill = data.get("skill")
-                is_ready = data.get("is_ready")
-                cooldown_duration = data.get("cooldown_duration", 0)
-                
-                if player and skill is not None:
-                    if room_id not in PARTY_STATES:
-                        PARTY_STATES[room_id] = {}
-                    if player not in PARTY_STATES[room_id]:
-                        PARTY_STATES[room_id][player] = {}
-                        
-                    PARTY_STATES[room_id][player][skill] = {
-                        "is_ready": is_ready,
-                        "timestamp": time.time(),
-                        "cooldown_duration": cooldown_duration
-                    }
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(b'{"status":"success"}')
+                data, error_status = self._read_json_body()
+                if error_status is not None:
+                    self._send_json(error_status, b'{"status":"rejected"}')
+                    return
+
+                room_id = sanitize_token(data.get("room_id", "default"),
+                                         MAX_ROOM_ID_LEN, "default")
+                player = sanitize_token(data.get("player"), MAX_PLAYER_NAME_LEN)
+                skill = sanitize_token(data.get("skill"), MAX_SKILL_NAME_LEN)
+                is_ready = bool(data.get("is_ready"))
+                cooldown_duration = coerce_cooldown_duration(data.get("cooldown_duration", 0))
+
+                if player and skill:
+                    # ThreadingHTTPServer는 요청마다 스레드를 띄우므로 공유 dict
+                    # 접근은 반드시 STATE_LOCK 아래에서 해야 한다. WS 핸들러는
+                    # 이미 락을 쓰고 있었지만 HTTP 핸들러는 빠져 있었다.
+                    with STATE_LOCK:
+                        PARTY_STATES.setdefault(room_id, {}).setdefault(player, {})[skill] = {
+                            "is_ready": is_ready,
+                            "timestamp": time.time(),
+                            "cooldown_duration": cooldown_duration
+                        }
+                self._send_json(200, b'{"status":"success"}')
             elif self.path == "/clear":
-                content_length = int(self.headers.get('Content-Length', 0))
-                post_data = self.rfile.read(content_length)
-                data = {}
-                if content_length > 0:
-                    try:
-                        data = json.loads(post_data.decode("utf-8"))
-                    except Exception:
-                        pass
-                
-                room_id = data.get("room_id", "default")
-                if room_id in PARTY_STATES:
-                    PARTY_STATES[room_id].clear()
-                    
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(b'{"status":"cleared"}')
+                data, error_status = self._read_json_body()
+                if error_status is not None:
+                    self._send_json(error_status, b'{"status":"rejected"}')
+                    return
+
+                room_id = sanitize_token(data.get("room_id", "default"),
+                                         MAX_ROOM_ID_LEN, "default")
+                with STATE_LOCK:
+                    if room_id in PARTY_STATES:
+                        PARTY_STATES[room_id].clear()
+
+                self._send_json(200, b'{"status":"cleared"}')
             else:
                 self.send_response(404)
                 self.end_headers()
-        except Exception as e:
+        except Exception:
+            # 예외 문자열을 그대로 돌려주면 내부 경로/상태가 노출된다.
             try:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(str(e).encode('utf-8'))
+                self._send_json(500, b'{"status":"error"}')
             except Exception:
                 pass
 
@@ -176,9 +244,16 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
                 self.end_headers()
         elif parsed_url.path == "/status":
             query_params = parse_qs(parsed_url.query)
-            room_id = query_params.get("room_id", ["default"])[0]
-            room_states = PARTY_STATES.get(room_id, {})
-            
+            room_id = sanitize_token(query_params.get("room_id", ["default"])[0],
+                                     MAX_ROOM_ID_LEN, "default")
+            # 락 없이 읽으면 다른 스레드의 setdefault 중간 상태를 직렬화할 수 있다.
+            # 응답 생성 중 dict가 바뀌지 않도록 락 안에서 얕은 복사를 만든다.
+            with STATE_LOCK:
+                room_states = {
+                    player: {skill: dict(state) for skill, state in skills.items()}
+                    for player, skills in PARTY_STATES.get(room_id, {}).items()
+                }
+
             response_data = {
                 "server_time": time.time(),
                 "states": room_states
@@ -218,8 +293,10 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
                     
                     action = msg.get("action")
                     if action == "join":
-                        room_id = msg.get("room_id", "default")
-                        player_name = msg.get("player", "unknown")
+                        room_id = sanitize_token(msg.get("room_id", "default"),
+                                                 MAX_ROOM_ID_LEN, "default")
+                        player_name = sanitize_token(msg.get("player", "unknown"),
+                                                     MAX_PLAYER_NAME_LEN, "unknown")
                         
                         with STATE_LOCK:
                             if room_id not in WEBSOCKET_CLIENTS:
@@ -237,13 +314,14 @@ class PartyStatusHandler(BaseHTTPRequestHandler):
                             send_ws_message(self.wfile, json.dumps(join_response))
                             
                     elif action == "update":
-                        room_id = msg.get("room_id", "default")
-                        player = msg.get("player")
-                        skill = msg.get("skill")
-                        is_ready = msg.get("is_ready")
-                        cooldown_duration = msg.get("cooldown_duration", 0)
+                        room_id = sanitize_token(msg.get("room_id", "default"),
+                                                 MAX_ROOM_ID_LEN, "default")
+                        player = sanitize_token(msg.get("player"), MAX_PLAYER_NAME_LEN)
+                        skill = sanitize_token(msg.get("skill"), MAX_SKILL_NAME_LEN)
+                        is_ready = bool(msg.get("is_ready"))
+                        cooldown_duration = coerce_cooldown_duration(msg.get("cooldown_duration", 0))
                         
-                        if player and skill is not None:
+                        if player and skill:
                             with STATE_LOCK:
                                 if room_id not in PARTY_STATES:
                                     PARTY_STATES[room_id] = {}
