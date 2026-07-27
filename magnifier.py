@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout,
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
                              QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
                              QCheckBox, QSpinBox, QComboBox, QDoubleSpinBox)
-from PyQt6.QtCore import (QTimer, Qt, QPoint, QPointF, QRect, QRectF, pyqtSignal, QObject,
+from PyQt6.QtCore import (QTimer, Qt, QPoint, QRect, QRectF, pyqtSignal, QObject,
                           QSize, QPropertyAnimation, QEasingCurve)
 from PyQt6.QtGui import (QImage, QPixmap, QCursor, QPainter, QPainterPath, QPen, QColor,
                          QIcon, QKeySequence, QWheelEvent, QFont, QFontMetrics, QBrush)

@@ -1,6 +1,5 @@
-import sys
 from PyQt6.QtWidgets import QDialog, QApplication
-from PyQt6.QtCore import Qt, QRect, pyqtSignal, QPoint
+from PyQt6.QtCore import Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QPainter, QPen, QColor
 import mss
 import cv2
