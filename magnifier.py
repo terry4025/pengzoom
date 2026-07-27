@@ -563,103 +563,206 @@ THEMES = {
     }
 }
 
-class CircularProgress(QWidget):
-    def __init__(self, color_hex="#ff453a", parent=None):
-        super().__init__(parent)
+# ---------------------------------------------------------------------------
+# 커스텀 페인팅 기반 파티 HUD 지원 유틸
+# ---------------------------------------------------------------------------
+# v2.46 이전 구현은 파티원·스킬마다 QFrame/QLabel/GlowDot/CircularProgress
+# 위젯을 만들고, 16ms 타이머에서 위젯별로 setStyleSheet()을 다시 호출했다.
+# 4인 파티 x 4스킬 기준 초당 약 500회 QSS 재파싱이 일어나고, GlowDot마다
+# 독립 QTimer가 붙어 숨겨진 상태에서도 계속 repaint를 트리거했다.
+#
+# 지금은 PartyPanel 하나가 paintEvent에서 전부 직접 그린다.
+#   - 핫 패스의 setStyleSheet 호출: 0회
+#   - QTimer: 패널당 1개
+#   - 위젯 트리 크기: 파티원 수와 무관하게 고정
+# 아래 상태 홀더들이 기존 위젯의 호출 계약(setValue/setText/text/show/hide)을
+# 그대로 유지하므로 update_states/tick_timers 로직과 테스트는 변하지 않는다.
+
+_CSS_RGBA_RE = re.compile(
+    r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)")
+_CSS_PX_RE = re.compile(r"([\d.]+)px")
+
+
+def parse_css_color(value, fallback=None):
+    """THEMES 프리셋의 '#hex' / 'rgba(r,g,b,a)' 문자열을 QColor로 변환한다."""
+    fallback = QColor(255, 255, 255) if fallback is None else QColor(fallback)
+    if isinstance(value, QColor):
+        return QColor(value)
+    if not isinstance(value, str):
+        return fallback
+    match = _CSS_RGBA_RE.search(value)
+    if match:
+        red, green, blue, alpha = match.groups()
+        alpha_255 = 255 if alpha is None else int(round(float(alpha) * 255))
+        return QColor(int(red), int(green), int(blue),
+                      max(0, min(255, alpha_255)))
+    stripped = value.strip()
+    if stripped.startswith("#"):
+        color = QColor(stripped)
+        if color.isValid():
+            return color
+    return fallback
+
+
+def parse_css_border(value, fallback_color=None, fallback_width=1.0):
+    """'1.2px solid rgba(...)' 형태를 (QColor, width) 튜플로 변환한다."""
+    color = parse_css_color(value, fallback_color or QColor(255, 255, 255, 20))
+    width = fallback_width
+    if isinstance(value, str):
+        match = _CSS_PX_RE.search(value)
+        if match:
+            try:
+                width = float(match.group(1))
+            except ValueError:
+                width = fallback_width
+    return color, max(0.5, width)
+
+
+# (클래스명, 크기, 색) -> QPixmap. 파티원이 들어올 때마다 SVG를 다시 렌더링해
+# UI 스레드를 블로킹하던 문제를 없앤다.
+_emblem_cache = {}
+
+
+def get_class_emblem(class_name, size, color_hex):
+    """클래스 엠블럼을 HUD 단색 마스크 QPixmap으로 캐싱해 반환한다.
+
+    캐시에 없고 로컬 SVG도 없으면 None을 돌려준다(호출측이 비동기 다운로드).
+    """
+    size = max(8, int(size))
+    key = (class_name, size, color_hex)
+    cached = _emblem_cache.get(key)
+    if cached is not None:
+        return cached
+
+    base_key = LOST_ARK_CLASSES.get(class_name)
+    if not base_key:
+        return None
+    path = os.path.join(CACHE_DIR, f"class_{base_key}.svg")
+    if not is_valid_class_icon(path):
+        return None
+    renderer = QSvgRenderer(path)
+    if not renderer.isValid():
+        return None
+
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    renderer.render(painter)
+    # 공식 클래스 SVG는 밝은 fill과 어두운 fill이 섞여 있다. 벡터 알파 마스크만
+    # 남기고 모든 엠블럼을 HUD 단색으로 정규화한다.
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(pixmap.rect(), QColor(color_hex))
+    painter.end()
+    _emblem_cache[key] = pixmap
+    return pixmap
+
+
+class SkillGauge:
+    """쿨타임 게이지 상태 홀더. 구 CircularProgress 위젯을 대체한다."""
+
+    __slots__ = ("value", "text", "flash_val", "color", "_visible")
+
+    def __init__(self, color_hex="#ff9f0a"):
         self.value = 100.0
-        self.color = QColor(color_hex)
-        self.bg_color = QColor(255, 255, 255, 10)
         self.text = ""
         self.flash_val = 0.0
-        self.setFixedSize(28, 28)
-        
+        self.color = QColor(color_hex)
+        self._visible = True
+
     def setValue(self, val):
-        self.value = float(val)
-        self.update()
-        
+        try:
+            self.value = float(val)
+        except (TypeError, ValueError):
+            self.value = 0.0
+
+    def setText(self, text):
+        self.text = "" if text is None else str(text)
+
+    def setFlash(self, val):
+        try:
+            self.flash_val = float(val)
+        except (TypeError, ValueError):
+            self.flash_val = 0.0
+
     def setColor(self, color_hex):
         self.color = QColor(color_hex)
-        self.update()
-        
-    def setText(self, text):
-        self.text = text
-        self.update()
-        
-    def setFlash(self, val):
-        self.flash_val = float(val)
-        self.update()
-        
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        rect = self.rect().adjusted(2, 2, -2, -2)
-        
-        painter.setPen(QPen(self.bg_color, 2))
-        painter.drawEllipse(rect)
-        
-        pen = QPen(self.color, 2.5)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        
-        angle = int((self.value / 100.0) * 360 * 16)
-        painter.drawArc(rect, 90 * 16, -angle)
-        
-        if self.text:
-            painter.setPen(QPen(QColor("#ffffff")))
-            font = QFont("Segoe UI", 9, QFont.Weight.Bold)
-            painter.setFont(font)
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.text)
-            
-        if self.flash_val > 0.0:
-            flash_color = QColor(255, 255, 255, int(200 * self.flash_val))
-            painter.setBrush(QBrush(flash_color))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(self.rect().adjusted(1, 1, -1, -1))
 
-class GlowDot(QWidget):
-    def __init__(self, color_hex="#30d158", parent=None):
-        super().__init__(parent)
+    def show(self):
+        self._visible = True
+
+    def hide(self):
+        self._visible = False
+
+    def isVisible(self):
+        return self._visible
+
+
+class ReadyPulse:
+    """Ready 펄스 상태 홀더. 구 GlowDot과 달리 자체 QTimer를 갖지 않는다."""
+
+    __slots__ = ("color", "speed", "intensity", "_visible")
+
+    def __init__(self, color_hex="#30d158"):
         self.color = QColor(color_hex)
-        self.setFixedSize(14, 14)
-        
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update)
-        self.timer.start(16)
-        
-        self.start_time = time.time()
         self.speed = 1.0
         self.intensity = 1.0
-        
+        self._visible = True
+
     def setColor(self, color_hex):
         self.color = QColor(color_hex)
-        self.update()
-        
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        center = self.rect().center()
-        base_rad = 3.0
-        
-        elapsed = time.time() - self.start_time
-        scale = 0.5 + 0.5 * math.sin(elapsed * 2 * math.pi * 0.70 * self.speed)
-        
-        max_glow_radius = 6.5
-        current_glow_radius = base_rad + (max_glow_radius - base_rad) * scale
-        
-        for r in range(int(current_glow_radius) + 1):
-            if r <= base_rad:
-                continue
-            alpha = int((1.0 - (r - base_rad) / (max_glow_radius - base_rad)) * 45 * scale * self.intensity)
-            c = QColor(self.color.red(), self.color.green(), self.color.blue(), max(0, min(255, alpha)))
-            painter.setBrush(QBrush(c))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(center, r, r)
-            
-        painter.setBrush(QBrush(self.color))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(center, int(base_rad), int(base_rad))
+
+    def show(self):
+        self._visible = True
+
+    def hide(self):
+        self._visible = False
+
+    def isVisible(self):
+        return self._visible
+
+
+class LabelState:
+    """텍스트 상태 홀더. 구 QLabel의 text()/setText() 계약만 유지한다."""
+
+    __slots__ = ("_text",)
+
+    def __init__(self, text=""):
+        self._text = "" if text is None else str(text)
+
+    def text(self):
+        return self._text
+
+    def setText(self, value):
+        self._text = "" if value is None else str(value)
+
+    def setStyleSheet(self, _value):
+        # 레거시 호출 호환용 no-op. 실제 색상은 PartyPanel.paintEvent가 정한다.
+        pass
+
+    def show(self):
+        pass
+
+    def hide(self):
+        pass
+
+# 파티 HUD 레이아웃 기준값 (ui_scale 배율 적용 전)
+HUD_EDGE = 6                  # 리사이즈 히트박스를 확보하는 창 여백
+HUD_PAD = 14                  # 컨테이너 내부 여백
+HUD_HEADER_H = 30
+HUD_NAME_ROW_H = 24
+HUD_SKILL_ROW_H = 27          # 스킬명 + 게이지 트랙 한 줄
+HUD_SKILL_ROW_H_MIN = 20      # '아이콘만' 모드
+HUD_CARD_GAP = 8
+HUD_COMPACT_ROW_H = 50
+HUD_COMPACT_GAP = 4
+HUD_STALE_AFTER_SEC = 6.0     # 이 시간 동안 갱신이 없으면 오프라인으로 표시
+
+# 약 30fps. 쿨타임 HUD에는 충분하고 기존 16ms 대비 이벤트 루프 부하가 절반이다.
+HUD_FRAME_INTERVAL_MS = 33
+# Ready 전환 플래시가 약 0.4초간 감쇠하도록 프레임 간격에서 역산한다.
+HUD_FLASH_DECAY = HUD_FRAME_INTERVAL_MS / 400.0
+
 
 class PartyPanel(QWidget):
     icon_downloaded = pyqtSignal(object, object)
@@ -674,203 +777,258 @@ class PartyPanel(QWidget):
                             Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
-        
+
         self.theme_name = "옵시디언 글래스"
-        self.layout_mode = "세로형"
+        self.layout_mode = "표준"
         self.display_mode = "상세 정보"
         self.ui_scale = 1.0
         self.speed = 1.0
         self.intensity = 1.0
         self.player_classes = {}
         self.icon_downloaded.connect(self._deliver_downloaded_icon)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        
-        self.container = QFrame()
-        self.container.setObjectName("Container")
-        self.container.setMouseTracking(True)
-        self.container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.container_layout = QVBoxLayout(self.container)
-        self.container_layout.setContentsMargins(14, 14, 14, 14)
-        self.container_layout.setSpacing(10)
-        
-        self.list_layout = QVBoxLayout()
-        self.list_layout.setSpacing(8)
-        self.container_layout.addLayout(self.list_layout)
-        
-        layout.addWidget(self.container)
-        self.resize(240, 320)
-        
+
         self.widgets = {}
         self.panel_opacity = 90
         self.setWindowOpacity(self.panel_opacity / 100.0)
-        
+
         self.resize_dir = None
         self.drag_position = None
         self.resize_border = 15
-        
-        # 60fps updates (16ms)
+
+        self._hover = False
+        self._layout_cache = []
+        self._content_height = 0
+        self._min_content_width = 0
+        self._autofitting = False
+        self._pulse_origin = time.monotonic()
+
+        self.resize(272, 210)
+        self._refresh_palette()
+        self._relayout()
+
+        # 패널 전체를 구동하는 단일 타이머. 파티원 수와 무관하게 1개다.
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick_timers)
-        self.timer.start(16)
-        
-        self.update_theme_styles()
-        self.apply_theme()
+        self.timer.start(HUD_FRAME_INTERVAL_MS)
 
-    def _deliver_downloaded_icon(self, path, callback):
-        try:
-            callback(path)
-        except RuntimeError:
-            # The player card can disappear before its background download ends.
-            pass
-        
+    # ---------------------------------------------------------------- 테마
+    def _refresh_palette(self):
+        """THEMES 프리셋 문자열을 페인팅용 QColor 팔레트로 변환한다."""
+        theme = THEMES.get(self.theme_name) or THEMES["옵시디언 글래스"]
+
+        self._c_bg = parse_css_color(theme.get("bg"), QColor(18, 18, 23, 224))
+        self._c_border, self._border_w = parse_css_border(
+            theme.get("border"), QColor(255, 255, 255, 20), 1.2)
+        self._c_text = parse_css_color(theme.get("font_color"), QColor(245, 245, 247))
+        self._c_ready = parse_css_color(theme.get("ready"), QColor(48, 209, 88))
+        self._c_cool = parse_css_color(theme.get("cooldown"), QColor(255, 159, 10))
+        self._c_accent = parse_css_color(theme.get("accent"), QColor(10, 132, 255))
+
+        self._c_text_dim = QColor(self._c_text)
+        self._c_text_dim.setAlpha(130)
+        self._c_text_faint = QColor(self._c_text)
+        self._c_text_faint.setAlpha(85)
+
+        # 유휴 상태 테두리는 거의 보이지 않게 두고, 호버 시에만 테마 테두리를 쓴다.
+        self._c_border_idle = QColor(self._c_border)
+        self._c_border_idle.setAlpha(max(6, self._c_border.alpha() // 4))
+
+        # 프리셋의 card_bg는 알파가 0.01~0.02라 어떤 배경에서도 사실상 보이지 않는다.
+        # 카드/트랙 대비는 배경 명도에서 직접 유도해 3개 테마 모두 가독성을 보장한다.
+        if self._c_bg.lightnessF() > 0.5:
+            self._c_card = QColor(0, 0, 0, 13)
+            self._c_card_border = QColor(0, 0, 0, 20)
+            self._c_track = QColor(0, 0, 0, 32)
+            self._c_idle_bar = QColor(0, 0, 0, 34)
+            self._c_chrome = QColor(0, 0, 0, 16)
+        else:
+            self._c_card = QColor(255, 255, 255, 12)
+            self._c_card_border = QColor(255, 255, 255, 18)
+            self._c_track = QColor(255, 255, 255, 28)
+            self._c_idle_bar = QColor(255, 255, 255, 30)
+            self._c_chrome = QColor(255, 255, 255, 18)
+
     def update_theme_styles(self):
-        theme = THEMES[self.theme_name]
-        self.container_style_normal = f"""
-            #Container {{
-                background-color: {theme['bg']};
-                border: 1.2px solid rgba(255, 255, 255, 0.02);
-                border-radius: 16px;
-            }}
-            QLabel {{ color: {theme['font_color']}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }}
-            QFrame.PlayerCard {{ background-color: {theme['card_bg']}; border: {theme['card_border']}; border-radius: 12px; }}
-            QFrame.SkillBadge {{ background-color: rgba(255, 255, 255, 0.01); border: 1px solid rgba(255, 255, 255, 0.02); border-radius: 8px; }}
-        """
-        self.container_style_hover = f"""
-            #Container {{
-                background-color: {theme['bg']};
-                border: {theme['border']};
-                border-radius: 16px;
-            }}
-            QLabel {{ color: {theme['font_color']}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }}
-            QFrame.PlayerCard {{ background-color: {theme['card_bg']}; border: {theme['card_border']}; border-radius: 12px; }}
-            QFrame.SkillBadge {{ background-color: rgba(255, 255, 255, 0.01); border: 1px solid rgba(255, 255, 255, 0.02); border-radius: 8px; }}
-        """
-        
+        """레거시 호환: QSS 문자열 대신 페인팅 팔레트를 재계산한다."""
+        self._refresh_palette()
+
     def apply_theme(self):
-        self.update_theme_styles()
-        self.container.setStyleSheet(self.container_style_normal)
-        theme = THEMES[self.theme_name]
-        
-        for player, p_info in self.widgets.items():
-            for skill, s_widgets in p_info["skill_widgets"].items():
-                s_widgets["glow"].setColor(theme['ready'])
+        self._refresh_palette()
+        ready_hex = self._c_ready.name()
+        cool_hex = self._c_cool.name()
+        text_hex = self._c_text.name()
+        emblem_size = self._emblem_size()
+
+        for p_data in self.widgets.values():
+            class_name = p_data.get("class_name")
+            if class_name:
+                p_data["emblem"] = get_class_emblem(class_name, emblem_size, text_hex)
+            for s_widgets in p_data["skill_widgets"].values():
+                s_widgets["glow"].setColor(ready_hex)
                 s_widgets["glow"].speed = self.speed
                 s_widgets["glow"].intensity = self.intensity
-                s_widgets["progress"].setColor(theme['cooldown'])
-                
+                s_widgets["progress"].setColor(cool_hex)
+
+        self._relayout()
+        self._autofit_size()
+        self.update()
+
     def rebuild_cards(self):
-        for i in reversed(range(self.list_layout.count())):
-            item = self.list_layout.itemAt(i)
-            if item and item.widget():
-                item.widget().setParent(None)
         self.widgets.clear()
-        
-        if self.parent_window and self.parent_window.client:
-            self.update_states(self.parent_window.client.party_states)
-            
+        client = getattr(self.parent_window, "client", None) if self.parent_window else None
+        if client is not None:
+            self.update_states(client.party_states)
+        else:
+            self._relayout()
+            self._autofit_size()
+            self.update()
+
+    # ------------------------------------------------------------ 엠블럼
+    def _emblem_size(self):
+        return max(12, int(round(CLASS_ICON_SIZE * max(0.6, self.ui_scale))))
+
+    def _resolve_emblem(self, class_name, player):
+        """캐시/로컬 SVG에서 즉시 가져오고, 없으면 비동기 다운로드를 예약한다."""
+        pixmap = get_class_emblem(class_name, self._emblem_size(), self._c_text.name())
+        if pixmap is not None:
+            return pixmap
+        if LOST_ARK_CLASSES.get(class_name):
+            get_class_icon_async(
+                class_name,
+                lambda path, cls=class_name, who=player: self.icon_downloaded.emit(path, (cls, who)))
+        return None
+
+    def _deliver_downloaded_icon(self, path, payload):
+        """백그라운드 다운로드가 끝나면 해당 파티원의 엠블럼만 갱신한다."""
+        if not path or not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        class_name, player = payload
+        p_data = self.widgets.get(player)
+        if not p_data:
+            # 다운로드가 끝나기 전에 파티원이 사라질 수 있다.
+            return
+        p_data["emblem"] = get_class_emblem(
+            class_name, self._emblem_size(), self._c_text.name())
+        if self.isVisible():
+            self.update()
+
+    # ----------------------------------------------------------- 레이아웃
+    def _is_compact(self):
+        return self.layout_mode == "컴팩트"
+
+    def _shows_names(self):
+        return self.display_mode != "아이콘만"
+
+    def _relayout(self):
+        """카드/행 사각형을 미리 계산해 paintEvent가 산술만 하도록 만든다."""
+        scale = max(0.6, float(self.ui_scale or 1.0))
+        pad = HUD_PAD * scale
+        inner_x = HUD_EDGE + pad
+        inner_w = max(90.0, self.width() - (HUD_EDGE + pad) * 2)
+        compact = self._is_compact()
+        gap = (HUD_COMPACT_GAP if compact else HUD_CARD_GAP) * scale
+        row_h = (HUD_SKILL_ROW_H if self._shows_names() else HUD_SKILL_ROW_H_MIN) * scale
+
+        y = HUD_EDGE + pad + HUD_HEADER_H * scale
+        cache = []
+        max_skills = 1
+
+        for player, p_data in self.widgets.items():
+            skills = list(p_data["skill_widgets"].keys())
+            max_skills = max(max_skills, len(skills))
+            if compact:
+                card_h = HUD_COMPACT_ROW_H * scale
+            else:
+                card_h = 16 * scale + HUD_NAME_ROW_H * scale + max(1, len(skills)) * row_h
+            cache.append({
+                "player": player,
+                "rect": QRectF(inner_x, y, inner_w, card_h),
+                "skills": skills,
+                "row_h": row_h,
+            })
+            y += card_h + gap
+
+        if cache:
+            y -= gap
+        self._layout_cache = cache
+        self._content_height = int(math.ceil(
+            max(120.0, y + pad + HUD_EDGE)))
+        # 컴팩트 모드는 스킬 셀이 가로로 늘어서므로 최소 폭을 확보해야 읽힌다.
+        if compact:
+            self._min_content_width = int(math.ceil(
+                (150 + 58 * max_skills) * scale + (HUD_EDGE + pad) * 2))
+        else:
+            self._min_content_width = int(math.ceil(210 * scale))
+
+    def _autofit_size(self):
+        """내용에 맞춰 높이를 맞추고, 폭은 최소 가독 폭까지만 넓힌다."""
+        if self._autofitting:
+            return
+        target_h = self._content_height
+        target_w = max(self.width(), self._min_content_width)
+        if abs(self.height() - target_h) <= 1 and target_w == self.width():
+            return
+        self._autofitting = True
+        try:
+            self.resize(target_w, target_h)
+        finally:
+            self._autofitting = False
+        self._relayout()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._relayout()
+
+    def showEvent(self, event):
+        self._relayout()
+        self._autofit_size()
+        if not self.timer.isActive():
+            self.timer.start(HUD_FRAME_INTERVAL_MS)
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        # 숨겨진 패널이 계속 프레임을 돌리지 않게 한다.
+        self.timer.stop()
+        super().hideEvent(event)
     def update_states(self, party_states):
         received_at = time.time()
+        if not isinstance(party_states, dict):
+            party_states = {}
         current_players = set(party_states.keys())
-        
-        # Remove old players
-        for p in list(self.widgets.keys()):
-            if p not in current_players:
-                self.widgets[p]["widget"].deleteLater()
-                del self.widgets[p]
-                
+
+        # 사라진 파티원 제거. 위젯 트리가 없으므로 deleteLater가 필요 없다.
+        for player in list(self.widgets.keys()):
+            if player not in current_players:
+                del self.widgets[player]
+
         for player, skills in party_states.items():
             if player not in self.widgets:
-                player_widget = QFrame()
-                player_widget.setProperty("class", "PlayerCard")
-                player_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                
-                p_lay = QVBoxLayout(player_widget)
-                p_lay.setContentsMargins(10, 8, 10, 8)
-                p_lay.setSpacing(6)
-                
-                name_row = QHBoxLayout()
-                name_row.setSpacing(6)
-                
-                icon_lbl = QLabel()
-                icon_lbl.setFixedSize(CLASS_ICON_SIZE, CLASS_ICON_SIZE)
-                icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                
-                name_lbl = QLabel(player)
-                name_lbl.setStyleSheet(f"font-size: {int(12*self.ui_scale)}px; font-weight: 700; opacity: 0.85;")
-                name_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                
-                name_row.addWidget(icon_lbl)
-                name_row.addWidget(name_lbl)
-                name_row.addStretch()
-                p_lay.addLayout(name_row)
-                
-                skills_widget = QWidget()
-                skills_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                if self.layout_mode == "가로형":
-                    skills_lay = QHBoxLayout(skills_widget)
-                    skills_lay.setContentsMargins(0, 0, 0, 0)
-                    skills_lay.setSpacing(int(8*self.ui_scale))
-                else:
-                    skills_lay = QVBoxLayout(skills_widget)
-                    skills_lay.setContentsMargins(0, 0, 0, 0)
-                    skills_lay.setSpacing(int(4*self.ui_scale))
-                
-                p_lay.addWidget(skills_widget)
-                self.list_layout.addWidget(player_widget)
-                
                 self.widgets[player] = {
-                    "widget": player_widget,
-                    "skills_layout": skills_lay,
-                    "skills_widget_container": skills_widget,
-                    "icon_lbl": icon_lbl,
-                    "name_lbl": name_lbl,
-                    "skill_widgets": {}
+                    "skill_widgets": {},
+                    "emblem": None,
+                    "class_name": "",
+                    "latest_timestamp": 0.0,
+                    "is_stale": False,
                 }
-                
             p_data = self.widgets[player]
-            
-            # Fetch emblem from the server or local mapping
-            class_name = skills.get("_class", self.player_classes.get(player, "홀리나이트")) if isinstance(skills, dict) else "홀리나이트"
-            self.player_classes[player] = class_name
-            
-            def _apply_icon(path, lbl=p_data["icon_lbl"]):
-                if path and is_valid_class_icon(path):
-                    renderer = QSvgRenderer(path)
-                    if renderer.isValid():
-                        pixmap = QPixmap(CLASS_ICON_SIZE, CLASS_ICON_SIZE)
-                        pixmap.fill(Qt.GlobalColor.transparent)
-                        painter = QPainter(pixmap)
-                        renderer.render(painter)
-                        # Official class SVGs use mixed dark/light fills.  Keep the
-                        # vector alpha mask but normalize every emblem to HUD white.
-                        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-                        painter.fillRect(pixmap.rect(), QColor("#f5f5f7"))
-                        painter.end()
-                        lbl.setPixmap(pixmap)
-                        return
-                lbl.setStyleSheet("background-color: rgba(255, 255, 255, 0.05); border-radius: 9px;")
-            
-            # Try cached first (instant), else async download
-            base_key = LOST_ARK_CLASSES.get(class_name)
-            cached_path = os.path.join(CACHE_DIR, f"class_{base_key}.svg") if base_key else None
-            if cached_path and is_valid_class_icon(cached_path):
-                _apply_icon(cached_path)
+
+            # 서버가 보낸 클래스 또는 로컬 매핑으로 엠블럼을 결정한다.
+            if isinstance(skills, dict):
+                class_name = skills.get("_class") or self.player_classes.get(player, "홀리나이트")
             else:
-                p_data["icon_lbl"].setStyleSheet("background-color: rgba(255, 255, 255, 0.05); border-radius: 9px;")
-                if base_key:
-                    get_class_icon_async(
-                        class_name,
-                        lambda path, apply_icon=_apply_icon: self.icon_downloaded.emit(path, apply_icon)
-                    )
-                
-            for s in list(p_data["skill_widgets"].keys()):
-                if s not in skills:
-                    p_data["skill_widgets"][s]["badge"].deleteLater()
-                    del p_data["skill_widgets"][s]
-                    
-            for skill, s_info in (skills.items() if isinstance(skills, dict) else {}):
+                class_name = "홀리나이트"
+            self.player_classes[player] = class_name
+            if p_data.get("class_name") != class_name or p_data.get("emblem") is None:
+                p_data["class_name"] = class_name
+                p_data["emblem"] = self._resolve_emblem(class_name, player)
+
+            skill_map = skills if isinstance(skills, dict) else {}
+            for dropped in list(p_data["skill_widgets"].keys()):
+                if dropped not in skill_map:
+                    del p_data["skill_widgets"][dropped]
+
+            latest_timestamp = 0.0
+            for skill, s_info in skill_map.items():
                 if not isinstance(skill, str) or skill.startswith('_') or not isinstance(s_info, dict):
                     continue
                 is_ready = bool(s_info.get("is_ready", False))
@@ -882,66 +1040,22 @@ class PartyPanel(QWidget):
                     timestamp = float(s_info.get("timestamp", 0.0) or 0.0)
                 except (TypeError, ValueError):
                     timestamp = 0.0
+                latest_timestamp = max(latest_timestamp, timestamp)
                 reported_deadline = (
                     timestamp + cooldown_duration
                     if not is_ready and cooldown_duration > 0.0
                     else 0.0
                 )
-                
+
                 if skill not in p_data["skill_widgets"]:
-                    badge = QFrame()
-                    badge.setProperty("class", "SkillBadge")
-                    badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                    b_lay = QHBoxLayout(badge)
-                    b_lay.setContentsMargins(int(8*self.ui_scale), int(5*self.ui_scale), int(8*self.ui_scale), int(5*self.ui_scale))
-                    b_lay.setSpacing(int(8*self.ui_scale))
-                    
-                    indicator_container = QWidget()
-                    indicator_container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                    ind_lay = QHBoxLayout(indicator_container)
-                    ind_lay.setContentsMargins(0, 0, 0, 0)
-                    ind_lay.setSpacing(0)
-                    
-                    theme = THEMES[self.theme_name]
-                    glow = GlowDot(theme["ready"])
-                    glow.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                    glow = ReadyPulse(self._c_ready.name())
                     glow.speed = self.speed
                     glow.intensity = self.intensity
-                    
-                    progress = CircularProgress(theme["cooldown"])
-                    progress.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                    
-                    ind_lay.addWidget(glow)
-                    ind_lay.addWidget(progress)
-                    b_lay.addWidget(indicator_container)
-                    
-                    text_container = QWidget()
-                    text_container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                    t_lay = QVBoxLayout(text_container)
-                    t_lay.setContentsMargins(0, 0, 0, 0)
-                    t_lay.setSpacing(0)
-                    
-                    skill_name_lbl = QLabel(skill)
-                    skill_name_lbl.setStyleSheet(f"font-size: {int(11*self.ui_scale)}px; font-weight: 600;")
-                    skill_name_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                    
-                    status_lbl = QLabel("Ready")
-                    status_lbl.setStyleSheet(f"font-size: {int(9*self.ui_scale)}px; font-weight: bold; opacity: 0.6;")
-                    status_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                    
-                    t_lay.addWidget(skill_name_lbl)
-                    t_lay.addWidget(status_lbl)
-                    b_lay.addWidget(text_container)
-                    b_lay.addStretch()
-                    
-                    p_data["skills_layout"].addWidget(badge)
                     p_data["skill_widgets"][skill] = {
-                        "badge": badge,
                         "glow": glow,
-                        "progress": progress,
-                        "skill_name_lbl": skill_name_lbl,
-                        "status_text_lbl": status_lbl,
-                        "text_container": text_container,
+                        "progress": SkillGauge(self._c_cool.name()),
+                        "skill_name_lbl": LabelState(skill),
+                        "status_text_lbl": LabelState("Ready"),
                         "is_ready": is_ready,
                         "cooldown_duration": cooldown_duration,
                         "timestamp": timestamp,
@@ -995,19 +1109,23 @@ class PartyPanel(QWidget):
                     s_widgets["timestamp"] = timestamp
                     s_widgets["cycle_total"] = cycle_total
                     s_widgets["cooldown_deadline"] = cooldown_deadline
-                    
-                s_widgets = p_data["skill_widgets"][skill]
-                if self.display_mode == "아이콘만":
-                    s_widgets["text_container"].hide()
-                    s_widgets["badge"].setStyleSheet("QFrame.SkillBadge { border: none; background: transparent; }")
-                else:
-                    s_widgets["text_container"].show()
+
+            p_data["latest_timestamp"] = latest_timestamp
+
+        self._relayout()
+        self._autofit_size()
+        if self.isVisible():
+            self.update()
 
     def tick_timers(self):
         current_time = time.time()
-        theme = THEMES[self.theme_name]
-        
+
         for player, p_data in list(self.widgets.items()):
+            latest = float(p_data.get("latest_timestamp", 0.0) or 0.0)
+            # 갱신이 끊긴 파티원은 오프라인으로 흐리게 표시한다.
+            p_data["is_stale"] = bool(
+                latest > 0.0 and (current_time - latest) > HUD_STALE_AFTER_SEC)
+
             for skill, s_widgets in list(p_data["skill_widgets"].items()):
                 is_ready = bool(s_widgets.get("is_ready", False))
                 try:
@@ -1018,115 +1136,454 @@ class PartyPanel(QWidget):
                     cooldown_deadline = max(0.0, float(s_widgets.get("cooldown_deadline", 0) or 0))
                 except (TypeError, ValueError):
                     cooldown_deadline = 0.0
-                
+
                 remaining = 0.0
                 if not is_ready and cooldown_deadline > 0.0:
                     remaining = max(0.0, cooldown_deadline - current_time)
-                        
+
                 if is_ready:
                     if not s_widgets.get("was_ready", True):
                         s_widgets["flash_val"] = 1.0
                     s_widgets["was_ready"] = True
                 else:
                     s_widgets["was_ready"] = False
-                    
+
                 flash_val = s_widgets.get("flash_val", 0.0)
                 if flash_val > 0.0:
-                    flash_val = max(0.0, flash_val - 0.04)
+                    flash_val = max(0.0, flash_val - HUD_FLASH_DECAY)
                     s_widgets["flash_val"] = flash_val
-                    
-                s_widgets["progress"].setFlash(flash_val)
-                
+
+                gauge = s_widgets["progress"]
+                gauge.setFlash(flash_val)
+
                 if is_ready:
                     s_widgets["glow"].show()
-                    s_widgets["progress"].hide()
+                    gauge.hide()
                     s_widgets["status_text_lbl"].setText("Ready")
-                    s_widgets["status_text_lbl"].setStyleSheet(f"color: {theme['ready']}; font-size: {int(9*self.ui_scale)}px; font-weight: bold;")
-                    
-                    flash_alpha = int(12 + 60 * flash_val)
-                    border_alpha = int(36 + 180 * flash_val)
-                    s_widgets["badge"].setStyleSheet(f"QFrame.SkillBadge {{ background-color: rgba(48, 209, 88, {flash_alpha/255.0:.2f}); border: 1.2px solid rgba(48, 209, 88, {border_alpha/255.0:.2f}); }}")
                 else:
                     s_widgets["glow"].hide()
-                    s_widgets["progress"].show()
+                    gauge.show()
 
                     if cycle_total > 0.0 and remaining > 0.0:
                         pct = max(0.0, min(100.0, (remaining / cycle_total) * 100.0))
-                        s_widgets["progress"].setValue(pct)
+                        gauge.setValue(pct)
 
                         if remaining >= 1.0:
-                            s_widgets["progress"].setText(f"{int(math.ceil(remaining))}")
-                            s_widgets["status_text_lbl"].setText(f"{int(math.ceil(remaining))}s")
+                            whole = f"{int(math.ceil(remaining))}"
+                            gauge.setText(whole)
+                            s_widgets["status_text_lbl"].setText(f"{whole}s")
                         else:
-                            s_widgets["progress"].setText(f"{remaining:.1f}")
+                            gauge.setText(f"{remaining:.1f}")
                             s_widgets["status_text_lbl"].setText(f"{remaining:.1f}s")
                     else:
-                        # Countdown reaching zero is not Ready.  Gauge-dependent
-                        # skills can stay unavailable until the Ready template is
-                        # actually recognized.
-                        s_widgets["progress"].setValue(0.0)
-                        s_widgets["progress"].setText("…")
+                        # 카운트다운이 0에 닿아도 Ready는 아니다. 게이지 의존 스킬은
+                        # Ready 템플릿이 실제로 인식될 때까지 사용 불가로 남는다.
+                        gauge.setValue(0.0)
+                        gauge.setText("…")
                         s_widgets["status_text_lbl"].setText("Cooldown")
-                        
-                    s_widgets["status_text_lbl"].setStyleSheet(f"color: {theme['cooldown']}; font-size: {int(9*self.ui_scale)}px; font-weight: bold;")
-                    s_widgets["badge"].setStyleSheet(f"QFrame.SkillBadge {{ background-color: rgba(255, 69, 58, 0.03); border: 1.2px solid rgba(255, 69, 58, 0.12); }}")
 
+        if self.isVisible():
+            self.update()
+
+    # ------------------------------------------------------------- 페인팅
+    @staticmethod
+    def _fill_round(painter, rect, radius, color):
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+        painter.fillPath(path, QBrush(color))
+
+    @staticmethod
+    def _stroke_round(painter, rect, radius, color, width=1.0):
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+        painter.strokePath(path, QPen(color, width))
+
+    @staticmethod
+    def _font(size, weight=400, mono=False, spacing=0.0):
+        font = QFont("Consolas" if mono else "Segoe UI", max(6, int(round(size))))
+        font.setWeight(QFont.Weight(weight))
+        if spacing:
+            font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+        return font
+
+    @staticmethod
+    def _elide(painter, text, width):
+        return QFontMetrics(painter.font()).elidedText(
+            str(text), Qt.TextElideMode.ElideRight, max(10, int(width)))
+
+    @staticmethod
+    def _tint(color, alpha):
+        tinted = QColor(color)
+        tinted.setAlpha(max(0, min(255, int(alpha))))
+        return tinted
+
+    def _pulse_scale(self):
+        """Ready 표시용 호흡 애니메이션 값(0.0~1.0)."""
+        elapsed = time.monotonic() - self._pulse_origin
+        speed = max(0.1, float(self.speed or 1.0))
+        return 0.5 + 0.5 * math.sin(elapsed * 2 * math.pi * 0.70 * speed)
+
+    def _brand_mark(self, size):
+        key = ("__brand__", int(size), "penguin")
+        pixmap = _emblem_cache.get(key)
+        if pixmap is None:
+            pixmap = get_svg_pixmap(LUCIDE_PENGUIN_SVG, int(size))
+            _emblem_cache[key] = pixmap
+        return pixmap
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+        scale = max(0.6, float(self.ui_scale or 1.0))
+        frame = QRectF(HUD_EDGE, HUD_EDGE,
+                       max(1, self.width() - HUD_EDGE * 2),
+                       max(1, self.height() - HUD_EDGE * 2))
+        radius = 16 * scale
+
+        self._fill_round(painter, frame, radius, self._c_bg)
+        border = (self._c_border if (self._hover and not self.panel_click_through)
+                  else self._c_border_idle)
+        self._stroke_round(painter, frame, radius, border, self._border_w)
+
+        self._paint_header(painter, frame, scale)
+
+        compact = self._is_compact()
+        for entry in self._layout_cache:
+            p_data = self.widgets.get(entry["player"])
+            if not p_data:
+                continue
+            if compact:
+                self._paint_player_compact(painter, entry, p_data, scale)
+            else:
+                self._paint_player_card(painter, entry, p_data, scale)
+
+        if not self.widgets:
+            painter.setPen(QPen(self._c_text_faint))
+            painter.setFont(self._font(9 * scale, 500))
+            painter.drawText(frame.adjusted(0, HUD_HEADER_H * scale, 0, 0),
+                             Qt.AlignmentFlag.AlignCenter, "파티원 접속 대기 중")
+
+    def _paint_header(self, painter, frame, scale):
+        pad = HUD_PAD * scale
+        x = frame.x() + pad
+        width = frame.width() - pad * 2
+        height = HUD_HEADER_H * scale
+        y = frame.y() + pad * 0.55
+
+        chip = QRectF(x, y + (height - 20 * scale) / 2.0, 20 * scale, 20 * scale)
+        self._fill_round(painter, chip, 6 * scale, self._c_chrome)
+        mark_size = int(round(14 * scale))
+        mark = self._brand_mark(mark_size)
+        if mark is not None and not mark.isNull():
+            painter.drawPixmap(int(chip.center().x() - mark_size / 2.0),
+                               int(chip.center().y() - mark_size / 2.0), mark)
+
+        painter.setPen(QPen(self._c_text_dim))
+        painter.setFont(self._font(8 * scale, 700, spacing=1.5 * scale))
+        painter.drawText(QRectF(x + 27 * scale, y, max(40.0, width - 120 * scale), height),
+                         Qt.AlignmentFlag.AlignVCenter, "PARTY STATUS")
+
+        connected = bool(getattr(self.parent_window, "client_running", False)) if self.parent_window else False
+        count = len(self.widgets)
+        if connected or count:
+            label, accent = f"LIVE {count}", self._c_ready
+        else:
+            label, accent = "OFFLINE", self._c_text_faint
+
+        badge_w = 54 * scale
+        badge = QRectF(frame.right() - pad - badge_w,
+                       y + (height - 17 * scale) / 2.0, badge_w, 17 * scale)
+        self._fill_round(painter, badge, badge.height() / 2.0, self._tint(accent, 34))
+        self._stroke_round(painter, badge, badge.height() / 2.0, self._tint(accent, 80), 1.0)
+        painter.setPen(QPen(accent))
+        painter.setFont(self._font(7.5 * scale, 700))
+        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, label)
+
+    def _paint_player_card(self, painter, entry, p_data, scale):
+        card = entry["rect"]
+        skills = entry["skills"]
+        row_h = entry["row_h"]
+        skill_widgets = p_data["skill_widgets"]
+        stale = bool(p_data.get("is_stale"))
+        ready_count = sum(1 for s in skills
+                          if (skill_widgets.get(s) or {}).get("is_ready"))
+        total = len(skills)
+
+        self._fill_round(painter, card, 12 * scale, self._c_card)
+        self._stroke_round(painter, card, 12 * scale, self._c_card_border, 1.0)
+
+        # 카드 좌측 상태 바. 준비된 스킬 유무를 주변시로 즉시 알 수 있다.
+        bar_color = self._c_ready if (ready_count and not stale) else self._c_idle_bar
+        bar = QRectF(card.x() + 1.5 * scale, card.y() + 9 * scale,
+                     3 * scale, max(4.0, card.height() - 18 * scale))
+        self._fill_round(painter, bar, 1.5 * scale, bar_color)
+
+        content_x = card.x() + 13 * scale
+        name_x = content_x
+        emblem = p_data.get("emblem")
+        if emblem is not None and not emblem.isNull():
+            painter.setOpacity(0.4 if stale else 1.0)
+            painter.drawPixmap(int(content_x), int(card.y() + 10 * scale), emblem)
+            painter.setOpacity(1.0)
+            name_x = content_x + emblem.width() + 8 * scale
+
+        summary_w = 78 * scale
+        name_rect = QRectF(name_x, card.y() + 8 * scale,
+                           max(30.0, card.right() - 13 * scale - summary_w - name_x),
+                           HUD_NAME_ROW_H * scale)
+        painter.setPen(QPen(self._c_text_faint if stale else self._c_text))
+        painter.setFont(self._font(10.5 * scale, 700))
+        painter.drawText(name_rect, Qt.AlignmentFlag.AlignVCenter,
+                         self._elide(painter, entry["player"], name_rect.width()))
+
+        painter.setFont(self._font(7.5 * scale, 700))
+        if stale:
+            painter.setPen(QPen(self._c_text_faint))
+            summary = "오프라인"
+        else:
+            painter.setPen(QPen(self._c_ready if ready_count else self._c_text_faint))
+            summary = f"{ready_count}/{total} READY" if total else "대기"
+        painter.drawText(QRectF(card.x(), card.y() + 8 * scale,
+                                card.width() - 13 * scale, HUD_NAME_ROW_H * scale),
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                         summary)
+
+        row_y = card.y() + (8 + HUD_NAME_ROW_H) * scale
+        row_w = max(40.0, card.right() - 13 * scale - content_x)
+        for skill in skills:
+            s_widgets = skill_widgets.get(skill)
+            if s_widgets is None:
+                continue
+            self._paint_skill_row(painter, skill, s_widgets,
+                                  QRectF(content_x, row_y, row_w, row_h), scale, stale)
+            row_y += row_h
+
+    def _paint_skill_row(self, painter, skill, s_widgets, rect, scale, stale):
+        show_names = self._shows_names()
+        is_ready = bool(s_widgets.get("is_ready"))
+        flash = max(0.0, min(1.0, float(s_widgets.get("flash_val", 0.0) or 0.0)))
+        gauge = s_widgets["progress"]
+        accent = self._c_text_faint if stale else (self._c_ready if is_ready else self._c_cool)
+
+        # Ready 행은 배경 틴트로 한 번 더 구분한다.
+        if is_ready and not stale:
+            self._fill_round(painter,
+                             rect.adjusted(-5 * scale, 0, 5 * scale, -2 * scale),
+                             7 * scale, self._tint(self._c_ready, 16 + 46 * flash))
+
+        track_h = max(2.0, 3 * scale)
+        if show_names:
+            text_h = 15 * scale
+            track_y = rect.y() + 18 * scale
+        else:
+            text_h = 12 * scale
+            track_y = rect.y() + 13 * scale
+        text_rect = QRectF(rect.x(), rect.y(), rect.width(), text_h)
+        track = QRectF(rect.x(), track_y, rect.width(), track_h)
+
+        if is_ready:
+            value_text = "READY"
+            value_font = self._font(7.5 * scale, 700)
+        else:
+            raw = s_widgets["status_text_lbl"].text()
+            if raw.endswith("s"):
+                value_text = raw
+                value_font = self._font(9 * scale, 700, mono=True)
+            else:
+                value_text = "COOLDOWN"
+                value_font = self._font(7 * scale, 700)
+
+        value_w = 54 * scale
+        if show_names:
+            painter.setPen(QPen(self._c_text_faint if stale
+                                else (self._c_text if is_ready else self._c_text_dim)))
+            painter.setFont(self._font(9 * scale, 600))
+            name_w = max(20.0, text_rect.width() - value_w)
+            painter.drawText(QRectF(text_rect.x(), text_rect.y(), name_w, text_rect.height()),
+                             Qt.AlignmentFlag.AlignVCenter,
+                             self._elide(painter, skill, name_w))
+
+        painter.setFont(value_font)
+        painter.setPen(QPen(accent))
+        painter.drawText(text_rect,
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                         value_text)
+
+        self._fill_round(painter, track, track_h / 2.0, self._c_track)
+
+        has_cycle = float(s_widgets.get("cycle_total", 0.0) or 0.0) > 0.0
+        ratio = 1.0 if is_ready else (
+            max(0.0, min(1.0, gauge.value / 100.0)) if has_cycle else 0.0)
+
+        if is_ready and not stale:
+            # 호흡 헤일로. 준비 완료를 화면을 보지 않고도 감지할 수 있게 한다.
+            pulse = self._pulse_scale() * max(0.0, min(2.0, float(self.intensity or 1.0)))
+            grow = 1.6 * scale * pulse
+            self._fill_round(painter, track.adjusted(0, -grow, 0, grow),
+                             (track_h + 2 * grow) / 2.0,
+                             self._tint(self._c_ready, 46 + 70 * pulse + 90 * flash))
+        if ratio > 0.0:
+            self._fill_round(painter,
+                             QRectF(track.x(), track.y(),
+                                    max(track_h, track.width() * ratio), track_h),
+                             track_h / 2.0, accent)
+
+    def _paint_player_compact(self, painter, entry, p_data, scale):
+        card = entry["rect"]
+        skills = entry["skills"]
+        skill_widgets = p_data["skill_widgets"]
+        stale = bool(p_data.get("is_stale"))
+        ready_count = sum(1 for s in skills
+                          if (skill_widgets.get(s) or {}).get("is_ready"))
+
+        self._fill_round(painter, card, 8 * scale, self._c_card)
+        self._stroke_round(painter, card, 8 * scale, self._c_card_border, 1.0)
+
+        if ready_count and not stale:
+            marker = QPainterPath()
+            mid = card.center().y()
+            marker.moveTo(card.x() + 5 * scale, mid - 5 * scale)
+            marker.lineTo(card.x() + 11 * scale, mid)
+            marker.lineTo(card.x() + 5 * scale, mid + 5 * scale)
+            marker.closeSubpath()
+            painter.fillPath(marker, QBrush(self._c_ready))
+
+        info_x = card.x() + 16 * scale
+        emblem = p_data.get("emblem")
+        if emblem is not None and not emblem.isNull():
+            painter.setOpacity(0.4 if stale else 1.0)
+            painter.drawPixmap(int(info_x),
+                               int(card.center().y() - emblem.height() / 2.0), emblem)
+            painter.setOpacity(1.0)
+            info_x += emblem.width() + 8 * scale
+
+        name_w = 84 * scale
+        painter.setPen(QPen(self._c_text_faint if stale else self._c_text))
+        painter.setFont(self._font(9.5 * scale, 700))
+        painter.drawText(QRectF(info_x, card.y() + 7 * scale, name_w, 15 * scale),
+                         Qt.AlignmentFlag.AlignVCenter,
+                         self._elide(painter, entry["player"], name_w))
+        painter.setPen(QPen(self._c_text_faint))
+        painter.setFont(self._font(7 * scale, 500))
+        painter.drawText(QRectF(info_x, card.bottom() - 21 * scale, name_w, 14 * scale),
+                         Qt.AlignmentFlag.AlignVCenter,
+                         self._elide(painter,
+                                     "오프라인" if stale else p_data.get("class_name", ""),
+                                     name_w))
+
+        cell_x = info_x + name_w + 6 * scale
+        available = max(30.0, card.right() - 10 * scale - cell_x)
+        cell_w = available / max(1, len(skills))
+        for skill in skills:
+            s_widgets = skill_widgets.get(skill)
+            if s_widgets is None:
+                continue
+            cell = QRectF(cell_x, card.y() + 5 * scale,
+                          max(26.0, cell_w - 5 * scale), card.height() - 10 * scale)
+            self._paint_skill_cell(painter, skill, s_widgets, cell, scale, stale)
+            cell_x += cell_w
+
+    def _paint_skill_cell(self, painter, skill, s_widgets, cell, scale, stale):
+        show_names = self._shows_names()
+        is_ready = bool(s_widgets.get("is_ready"))
+        flash = max(0.0, min(1.0, float(s_widgets.get("flash_val", 0.0) or 0.0)))
+        gauge = s_widgets["progress"]
+        accent = self._c_text_faint if stale else (self._c_ready if is_ready else self._c_cool)
+
+        if is_ready and not stale:
+            self._fill_round(painter, cell, 4 * scale,
+                             self._tint(self._c_ready, 26 + 50 * flash))
+            self._stroke_round(painter, cell, 4 * scale,
+                               self._tint(self._c_ready, 96), 1.0)
+        else:
+            self._fill_round(painter, cell, 4 * scale, self._c_chrome)
+            self._stroke_round(painter, cell, 4 * scale, self._c_card_border, 1.0)
+
+        if show_names:
+            painter.setPen(QPen(self._c_text_faint))
+            painter.setFont(self._font(7 * scale, 600))
+            painter.drawText(QRectF(cell.x() + 5 * scale, cell.y() + 3 * scale,
+                                    cell.width() - 10 * scale, 12 * scale),
+                             Qt.AlignmentFlag.AlignVCenter,
+                             self._elide(painter, skill, cell.width() - 10 * scale))
+            value_y = cell.y() + 14 * scale
+        else:
+            value_y = cell.y() + 8 * scale
+
+        painter.setPen(QPen(accent))
+        if is_ready:
+            painter.setFont(self._font(11 * scale, 800))
+            value_text = "RDY"
+        else:
+            raw = s_widgets["status_text_lbl"].text()
+            if raw.endswith("s"):
+                painter.setFont(self._font(13 * scale, 800, mono=True))
+                value_text = raw[:-1]
+            else:
+                painter.setFont(self._font(8 * scale, 700))
+                value_text = "CD"
+        painter.drawText(QRectF(cell.x(), value_y, cell.width(), 20 * scale),
+                         Qt.AlignmentFlag.AlignCenter, value_text)
+
+        track_h = max(2.0, 2 * scale)
+        track = QRectF(cell.x() + 4 * scale, cell.bottom() - 6 * scale,
+                       max(8.0, cell.width() - 8 * scale), track_h)
+        self._fill_round(painter, track, track_h / 2.0, self._c_track)
+
+        has_cycle = float(s_widgets.get("cycle_total", 0.0) or 0.0) > 0.0
+        ratio = 1.0 if is_ready else (
+            max(0.0, min(1.0, gauge.value / 100.0)) if has_cycle else 0.0)
+        if ratio > 0.0:
+            self._fill_round(painter,
+                             QRectF(track.x(), track.y(),
+                                    max(track_h, track.width() * ratio), track_h),
+                             track_h / 2.0, accent)
+
+    # -------------------------------------------------------- 마우스/호버
     def enterEvent(self, event):
         if not self.panel_click_through:
-            self.container.setStyleSheet(self.container_style_hover)
+            self._hover = True
+            self.update()
         super().enterEvent(event)
-        
+
     def leaveEvent(self, event):
-        if not self.panel_click_through:
-            self.container.setStyleSheet(self.container_style_normal)
+        if self._hover:
+            self._hover = False
+            self.update()
         super().leaveEvent(event)
 
+    def _near_right_edge(self, pos):
+        return pos.x() >= self.width() - self.resize_border
+
     def mousePressEvent(self, event):
-        if self.panel_click_through: return
+        if self.panel_click_through:
+            return
         if event.button() == Qt.MouseButton.LeftButton:
-            pos = event.position().toPoint()
-            rect = self.rect()
-            
-            is_right = pos.x() >= rect.width() - self.resize_border
-            is_bottom = pos.y() >= rect.height() - self.resize_border
-            
-            if is_right and is_bottom:
-                self.resize_dir = "BottomRight"
-            elif is_right:
+            if self._near_right_edge(event.position().toPoint()):
                 self.resize_dir = "Right"
-            elif is_bottom:
-                self.resize_dir = "Bottom"
             else:
                 self.resize_dir = None
-                self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                
+                self.drag_position = (event.globalPosition().toPoint()
+                                      - self.frameGeometry().topLeft())
+
     def mouseMoveEvent(self, event):
-        if self.panel_click_through: return
-        pos = event.position().toPoint()
-        rect = self.rect()
-        
+        if self.panel_click_through:
+            return
+        # 높이는 카드 수에 맞춰 자동 조절되므로 사용자는 폭만 조절한다.
         if event.buttons() == Qt.MouseButton.NoButton:
-            is_right = pos.x() >= rect.width() - self.resize_border
-            is_bottom = pos.y() >= rect.height() - self.resize_border
-            if is_right and is_bottom:
-                self.setCursor(Qt.CursorShape.SizeBDiagCursor)
-            elif is_right:
-                self.setCursor(Qt.CursorShape.SizeHorCursor)
-            elif is_bottom:
-                self.setCursor(Qt.CursorShape.SizeVerCursor)
-            else:
-                self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.setCursor(Qt.CursorShape.SizeHorCursor
+                           if self._near_right_edge(event.position().toPoint())
+                           else Qt.CursorShape.ArrowCursor)
         elif event.buttons() == Qt.MouseButton.LeftButton:
             global_pos = event.globalPosition().toPoint()
-            if self.resize_dir == "BottomRight":
-                self.resize(max(150, global_pos.x() - self.x()), max(100, global_pos.y() - self.y()))
-            elif self.resize_dir == "Right":
-                self.resize(max(150, global_pos.x() - self.x()), self.height())
-            elif self.resize_dir == "Bottom":
-                self.resize(self.width(), max(100, global_pos.y() - self.y()))
+            if self.resize_dir == "Right":
+                self.resize(max(self._min_content_width, global_pos.x() - self.x()),
+                            self.height())
             elif self.drag_position is not None:
                 self.move(global_pos - self.drag_position)
-                
+
     def mouseReleaseEvent(self, event):
         self.resize_dir = None
         self.drag_position = None
@@ -1359,11 +1816,11 @@ class PartyOverlaySettingsModal(QDialog):
         grid.addWidget(theme_lbl, 0, 0)
         grid.addWidget(self.theme_combo, 0, 1)
         
-        # Layout Mode
-        layout_lbl = QLabel("배치 형태 레이아웃:")
+        # Density Mode (표준 = 카드형, 컴팩트 = 행 단위 테이블형)
+        layout_lbl = QLabel("밀도 모드:")
         layout_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
         self.layout_combo = QComboBox()
-        self.layout_combo.addItems(["세로형", "가로형"])
+        self.layout_combo.addItems(["표준", "컴팩트"])
         if self.overlay:
             self.layout_combo.setCurrentText(self.overlay.layout_mode)
         self.layout_combo.currentTextChanged.connect(self.change_layout)
@@ -3318,13 +3775,15 @@ class MagnifierWindow(QMainWindow):
                             theme_loaded = "옵시디언 글래스"
                         self.party_panel.theme_name = theme_loaded
                         
-                        layout_loaded = data.get('party_layout_mode', "세로형")
-                        if layout_loaded == "List":
-                            layout_loaded = "세로형"
-                        elif layout_loaded == "Grid":
-                            layout_loaded = "가로형"
-                        if layout_loaded not in ["세로형", "가로형"]:
-                            layout_loaded = "세로형"
+                        # v2.46: '세로형/가로형' 배치 옵션이 '표준/컴팩트' 밀도
+                        # 모드로 바뀌었다. 구버전 설정값을 그대로 매핑한다.
+                        layout_loaded = data.get('party_layout_mode', "표준")
+                        if layout_loaded in ("List", "세로형"):
+                            layout_loaded = "표준"
+                        elif layout_loaded in ("Grid", "가로형"):
+                            layout_loaded = "컴팩트"
+                        if layout_loaded not in ("표준", "컴팩트"):
+                            layout_loaded = "표준"
                         self.party_panel.layout_mode = layout_loaded
                         
                         display_loaded = data.get('party_display_mode', "상세 정보")
@@ -3447,7 +3906,7 @@ class MagnifierWindow(QMainWindow):
             party_size = None
             party_opacity = 90
             party_theme = "옵시디언 글래스"
-            party_layout = "세로형"
+            party_layout = "표준"
             party_display = "상세 정보"
             party_scale = 1.0
             party_speed = 1.0
@@ -3460,7 +3919,7 @@ class MagnifierWindow(QMainWindow):
                 party_size = [self.party_panel.width(), self.party_panel.height()]
                 party_opacity = getattr(self.party_panel, 'panel_opacity', 90)
                 party_theme = getattr(self.party_panel, 'theme_name', "옵시디언 글래스")
-                party_layout = getattr(self.party_panel, 'layout_mode', "세로형")
+                party_layout = getattr(self.party_panel, 'layout_mode', "표준")
                 party_display = getattr(self.party_panel, 'display_mode', "상세 정보")
                 party_scale = getattr(self.party_panel, 'ui_scale', 1.0)
                 party_speed = getattr(self.party_panel, 'speed', 1.0)
