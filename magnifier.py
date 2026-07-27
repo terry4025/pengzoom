@@ -481,12 +481,12 @@ LOST_ARK_CLASSES = {
 CLASS_ICON_CDN = "https://cdn-lostark.game.onstove.com/2018/obt/assets/images/common/class"
 CLASS_ICON_SIZE = 22
 
-# Use APPDATA-based cache dir for EXE compatibility
-if getattr(sys, 'frozen', False):
-    _appdata = os.environ.get('APPDATA', os.path.expanduser('~'))
-    CACHE_DIR = os.path.join(_appdata, 'PengZoom', 'cache')
-else:
-    CACHE_DIR = os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "scratch", "cache")
+# 클래스 아이콘 캐시는 APPDATA에 둔다. 이전에는 소스 실행 시에만 무관한 도구의
+# 경로(~/.gemini/antigravity/scratch/cache)를 쓰고 있어서, exe가 이미 받아둔
+# 아이콘을 재사용하지 못하고 22개를 다시 내려받았다. config.json도 이미 APPDATA를
+# 쓰므로 경로를 통일한다(frozen exe 기준 경로는 그대로다).
+_appdata = os.environ.get('APPDATA', os.path.expanduser('~'))
+CACHE_DIR = os.path.join(_appdata, 'PengZoom', 'cache')
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 # Set of class keys that failed to download — skip retry within same session
