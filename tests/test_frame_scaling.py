@@ -6,14 +6,19 @@ v2.46에서 PIL 파이프라인을 numpy -> QImage 직접 변환으로 교체했
 """
 
 import os
+import sys
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# `python tests/test_...py` 로 바로 실행할 수 있도록 저장소 루트를 import 경로에 둔다.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 from PyQt6.QtWidgets import QApplication
 
-from magnifier import scale_bgra_frame_to_qimage
+from magnifier import scale_bgra_frame_to_qimage  # noqa: E402
 
 
 class FrameScalingTests(unittest.TestCase):

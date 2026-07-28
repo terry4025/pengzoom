@@ -1,10 +1,15 @@
 import io
 import json
+import sys
 import unittest
 import urllib.error
+from pathlib import Path
 from unittest import mock
 
-from network_manager import CharacterProfileLookup
+# `python tests/test_...py` 로 바로 실행할 수 있도록 저장소 루트를 import 경로에 둔다.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from network_manager import CharacterProfileLookup  # noqa: E402
 
 
 class _FakeResponse:

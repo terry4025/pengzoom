@@ -1,4 +1,5 @@
 import os
+import sys
 import tempfile
 import time
 import unittest
@@ -8,11 +9,14 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# `python tests/test_...py` 로 바로 실행할 수 있도록 저장소 루트를 import 경로에 둔다.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import numpy as np
 from PyQt6.QtWidgets import QApplication
 
-from cooldown_detector import CooldownDetector
-from magnifier import MagnifierWindow, PartyPanel
+from cooldown_detector import CooldownDetector  # noqa: E402
+from magnifier import MagnifierWindow, PartyPanel  # noqa: E402
 
 
 class _FakeScreenCapture:

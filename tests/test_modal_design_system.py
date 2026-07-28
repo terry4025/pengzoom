@@ -14,13 +14,18 @@
 import ast
 import io
 import os
+import sys
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# `python tests/test_...py` 로 바로 실행할 수 있도록 저장소 루트를 import 경로에 둔다.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from PyQt6.QtWidgets import QApplication, QLabel
 
-import magnifier
+import magnifier  # noqa: E402
 
 SOURCE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "magnifier.py")

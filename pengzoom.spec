@@ -29,9 +29,17 @@ EXE_NAME = f"펭구 줌인 {APP_VERSION} Pro"
 if DEBUG_CONSOLE:
     EXE_NAME += " (debug-console)"
 
-# cooldown_ocr._resource_path()가 sys._MEIPASS 아래에서 찾는 경로.
+# 런타임이 sys._MEIPASS 아래에서 찾는 경로들.
+#   cooldown_ocr._resource_path()          -> ocr_profiles/
+#   boss_debuff_detector.assets_root()     -> boss_debuff_assets/
+#
+# boss_debuff_assets 는 통째로 넣지 않는다. reference/ 와 samples/ 는 템플릿을
+# 만들 때 쓴 개발용 원본(400KB 이상)이고 감지 경로에서 읽지 않는다. 실제로
+# 필요한 것은 아이콘 템플릿과 숫자 글리프 프로파일 두 개다.
 datas = [
     (str(ROOT / "ocr_profiles"), "ocr_profiles"),
+    (str(ROOT / "boss_debuff_assets" / "icons"), "boss_debuff_assets/icons"),
+    (str(ROOT / "boss_debuff_assets" / "timer_profiles"), "boss_debuff_assets/timer_profiles"),
 ]
 
 hiddenimports = [

@@ -9,11 +9,16 @@ v2.46에서 다음을 수정했다.
 import inspect
 import io
 import json
+import sys
 import threading
 import unittest
+from pathlib import Path
 
-import network_manager
-import server
+# `python tests/test_...py` 로 바로 실행할 수 있도록 저장소 루트를 import 경로에 둔다.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import network_manager  # noqa: E402
+import server  # noqa: E402
 
 
 def make_frame(payload, opcode=0x1, force_len=None, masked=False):

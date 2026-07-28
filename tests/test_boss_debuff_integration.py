@@ -6,10 +6,14 @@ and a test must never overwrite the real user settings.
 """
 
 import os
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+
+# `python tests/test_...py` 로 바로 실행할 수 있도록 저장소 루트를 import 경로에 둔다.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 _ISOLATED_APPDATA = tempfile.mkdtemp(prefix="pengzoom_test_")
 os.environ["APPDATA"] = _ISOLATED_APPDATA

@@ -73,7 +73,9 @@ python magnifier.py
 ---
 
 ## 📦 다시 단일 실행파일(.exe)로 빌드하기
-소스코드를 수정하신 후 다시 `.exe` 무설치 실행파일로 패키징하고 싶으시다면, `pyinstaller` 라이브러리를 사용하여 손쉽게 빌드할 수 있습니다.
+빌드 정의는 `pengzoom.spec` 한 곳에 모여 있습니다. 동봉할 데이터 파일, 숨은 import,
+제외 모듈, 실행파일 이름(`magnifier.py`의 `APP_VERSION`에서 자동으로 따옵니다)이
+모두 스펙에 기록되어 있어 누가 빌드해도 같은 결과가 나옵니다.
 
 ### 1. PyInstaller 설치
 ```bash
@@ -81,20 +83,29 @@ pip install pyinstaller
 ```
 
 ### 2. 빌드 실행
-아래 명령어를 실행하면 종속성 라이브러리와 파이썬 환경이 모두 패키징된 단일 exe 파일이 생성됩니다.
 ```bash
-pyinstaller --noconfirm --onedir --windowed --add-data "C:/Users/Administrator/Downloads/펭줌;." magnifier.py
+pyinstaller --noconfirm pengzoom.spec
 ```
-또는 완전히 하나의 파일로 패키징하려면:
-```bash
-pyinstaller --noconfirm --onefile --windowed magnifier.py
-```
-빌드가 완료되면 `dist/` 폴더 내에 생성된 실행파일을 확인할 수 있습니다.
+`dist/펭구 줌인 <버전> Pro.exe` 하나가 생성됩니다.
 
-> ⚠️ 보스 디버프 감지에 쓰는 아이콘 템플릿과 숫자 프로파일은 데이터 파일이라 자동으로
-> 포함되지 않습니다. `--add-data` 로 함께 넣어 주세요.
-> ```bash
-> pyinstaller --noconfirm --onefile --windowed ^
->   --add-data "boss_debuff_assets;boss_debuff_assets" ^
->   --add-data "ocr_profiles;ocr_profiles" magnifier.py
-> ```
+보스 디버프 아이콘 템플릿(`boss_debuff_assets/icons`)과 숫자 글리프
+프로파일(`boss_debuff_assets/timer_profiles`), 쿨타임 OCR 프로파일(`ocr_profiles`)은
+스펙이 이미 동봉하므로 `--add-data` 를 따로 붙일 필요가 없습니다.
+동봉 누락은 `tests/test_build_spec.py` 가 검사합니다.
+
+### 3. 기동 실패를 진단할 때
+`--windowed` 빌드는 stdout/stderr가 사라져서 원인을 볼 수 없습니다.
+콘솔이 붙은 진단용 바이너리를 만들려면:
+```bash
+set PENGZOOM_DEBUG_CONSOLE=1
+pyinstaller --noconfirm pengzoom.spec
+```
+
+---
+
+## 🧪 테스트
+```bash
+python tests/test_boss_debuff_detector.py
+python tests/test_build_spec.py
+```
+`tests/` 아래 파일은 표준 `unittest` 기반이라 별도 러너 없이 개별 실행됩니다.

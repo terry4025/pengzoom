@@ -1,3 +1,4 @@
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,8 +7,11 @@ from unittest import mock
 import cv2
 import numpy as np
 
-import boss_debuff_detector as bdd
-from boss_debuff_detector import (
+# `python tests/test_...py` 로 바로 실행할 수 있도록 저장소 루트를 import 경로에 둔다.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import boss_debuff_detector as bdd  # noqa: E402
+from boss_debuff_detector import (  # noqa: E402
     ACTIVATE_FRAMES,
     DEACTIVATE_FRAMES,
     DEFAULT_DEBUFF_ID,
