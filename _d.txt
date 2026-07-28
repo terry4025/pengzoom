@@ -1,0 +1,199 @@
+=== 캐스트 0 (44장)
+          _00001_20s.png label= 20 read=  19 chroma thr= 70 conf=1.00 n=2 warm= -56
+          _00002_20s.png label= 20 read=  19 chroma thr=100 conf=0.84 n=2 warm= -84
+          _00003_19s.png label= 19 read=  18 warm   thr= 55 conf=1.00 n=2 warm= -75
+          _00004_19s.png label= 19 read=  18 warm   thr= 58 conf=0.82 n=2 warm= -92
+          _00005_18s.png label= 18 read=  18 bright thr= 94 conf=0.84 n=2 warm= -39
+          _00006_18s.png label= 18 read=  17 warm   thr= 57 conf=1.00 n=2 warm= -78
+          _00007_17s.png label= 17 read=  16 chroma thr= 92 conf=0.78 n=2 warm= -57
+          _00008_17s.png label= 17 read=  16 chroma thr= 69 conf=0.76 n=2 warm= -56
+          _00009_16s.png label= 16 read=  16 warm   thr= 45 conf=0.75 n=2 warm= -54
+          _00010_16s.png label= 16 read=  15 warm   thr= 56 conf=1.00 n=2 warm= -52
+          _00011_16s.png label= 16 read=  15 warm   thr= 56 conf=1.00 n=2 warm= -51
+          _00012_15s.png label= 15 read=  14 warm   thr= 57 conf=1.00 n=2 warm= -54
+          _00013_15s.png label= 15 read=  14 warm   thr= 57 conf=1.00 n=2 warm= -55
+          _00014_14s.png label= 14 read=  14 warm   thr= 74 conf=1.00 n=2 warm= -50
+          _00015_14s.png label= 14 read=  13 warm   thr= 44 conf=1.00 n=2 warm= -59
+          _00016_14s.png label= 14 read=None chroma thr= 49 conf=0.65 n=1 warm=  12
+          _00017_13s.png label= 13 read=  12 warm   thr= 68 conf=0.81 n=2 warm=  15
+          _00018_13s.png label= 13 read=  12 warm   thr= 55 conf=1.00 n=2 warm= -55
+          _00019_12s.png label= 12 read=  12 warm   thr= 56 conf=1.00 n=2 warm= -40
+          _00020_12s.png label= 12 read=  11 warm   thr= 56 conf=1.00 n=2 warm= -56
+          _00021_12s.png label= 12 read=  11 warm   thr= 56 conf=1.00 n=2 warm= -54
+          _00022_11s.png label= 11 read=  10 chroma thr= 67 conf=0.77 n=2 warm= -57
+          _00023_11s.png label= 11 read=  10 chroma thr= 72 conf=1.00 n=2 warm= -58
+          _00024_10s.png label= 10 read=  10 warm   thr= 44 conf=1.00 n=2 warm= -50
+          _00025_09s.png label=  9 read=   8 warm   thr= 50 conf=1.00 n=1 warm= -48  <== 모순
+          _00026_09s.png label=  9 read=   8 warm   thr= 65 conf=0.84 n=1 warm= -41
+          _00027_08s.png label=  8 read=   8 chroma thr= 84 conf=0.85 n=1 warm= -45
+          _00028_08s.png label=  8 read=   7 bright thr= 58 conf=0.82 n=1 warm= -47
+          _00029_07s.png label=  7 read=   7 warm   thr= 40 conf=0.81 n=1 warm= -50
+          _00030_07s.png label=  7 read=   6 warm   thr= 49 conf=1.00 n=1 warm= -52
+          _00031_07s.png label=  7 read=   6 warm   thr= 39 conf=1.00 n=1 warm= -56
+          _00032_06s.png label=  6 read=   6 chroma thr= 69 conf=1.00 n=1 warm= -61
+          _00033_06s.png label=  6 read=   5 chroma thr= 69 conf=1.00 n=1 warm= -58
+          _00034_05s.png label=  5 read=   5 warm   thr= 53 conf=1.00 n=1 warm= -59
+          _00035_05s.png label=  5 read=   4 warm   thr= 44 conf=1.00 n=1 warm= -55
+          _00036_05s.png label=  5 read=   4 warm   thr= 43 conf=0.84 n=1 warm= -56
+          _00037_04s.png label=  4 read=   3 warm   thr= 63 conf=0.79 n=1 warm= -61
+          _00038_04s.png label=  4 read=   3 chroma thr= 66 conf=0.76 n=1 warm= -47
+          _00039_03s.png label=  3 read=   3 warm   thr= 49 conf=0.80 n=1 warm= -55
+          _00040_03s.png label=  3 read=None warm   thr= 73 conf=0.58 n=1 warm= -51
+          _00041_03s.png label=  3 read=   2 warm   thr= 73 conf=0.72 n=1 warm= -50
+          _00042_02s.png label=  2 read=   1 warm   thr= 54 conf=1.00 n=1 warm= -52
+          _00043_02s.png label=  2 read=   1 warm   thr= 54 conf=1.00 n=1 warm= -45
+          _00044_01s.png label=  1 read=   1 warm   thr= 54 conf=1.00 n=1 warm= -50
+=== 캐스트 1 (25장)
+          _00045_14s.png label= 14 read=  13 warm   thr= 62 conf=0.80 n=2 warm=  35
+          _00046_13s.png label= 13 read=  12 warm   thr= 65 conf=1.00 n=2 warm=  35
+          _00047_12s.png label= 12 read=  11 warm   thr= 36 conf=1.00 n=2 warm=  34
+          _00048_12s.png label= 12 read=  11 warm   thr= 36 conf=1.00 n=2 warm=  35
+          _00049_11s.png label= 11 read=  10 bright thr= 71 conf=1.00 n=2 warm=  36
+          _00050_11s.png label= 11 read=  10 bright thr= 71 conf=1.00 n=2 warm=  34
+          _00051_11s.png label= 11 read=  10 warm   thr= 48 conf=0.72 n=2 warm=  37
+          _00052_09s.png label=  9 read=None bright thr= 73 conf=0.59 n=1 warm=  46
+          _00053_09s.png label=  9 read=   8 bright thr= 57 conf=0.74 n=1 warm=  67  <== 모순
+          _00054_09s.png label=  9 read=None bright thr= 71 conf=0.57 n=1 warm=  89
+          _00055_08s.png label=  8 read=   7 bright thr= 60 conf=1.00 n=1 warm=  91
+          _00056_08s.png label=  8 read=None chroma thr= 27 conf=0.64 n=1 warm=  82
+          _00057_07s.png label=  7 read=   6 bright thr= 56 conf=1.00 n=1 warm=  73
+          _00058_07s.png label=  7 read=None chroma thr= 61 conf=0.57 n=1 warm=  33
+          _00059_06s.png label=  6 read=None warm   thr= 37 conf=0.68 n=1 warm=  35
+          _00060_06s.png label=  6 read=None warm   thr= 37 conf=0.68 n=1 warm=  34
+          _00061_05s.png label=  5 read=   4 warm   thr= 38 conf=0.81 n=1 warm=  33  <== 모순
+          _00062_05s.png label=  5 read=   4 bright thr= 63 conf=1.00 n=1 warm=  59
+          _00063_04s.png label=  4 read=   3 bright thr= 92 conf=0.79 n=1 warm=  41
+          _00064_04s.png label=  4 read=   3 bright thr= 92 conf=0.79 n=1 warm=  30
+          _00065_04s.png label=  4 read=   3 bright thr= 92 conf=0.79 n=1 warm=  30
+          _00066_03s.png label=  3 read=None bright thr= 96 conf=0.66 n=1 warm=  28
+          _00067_03s.png label=  3 read=   2 warm   thr= 63 conf=0.73 n=1 warm=  27
+          _00068_02s.png label=  2 read=   1 warm   thr= 37 conf=1.00 n=1 warm=  25
+          _00069_02s.png label=  2 read=   1 warm   thr= 47 conf=1.00 n=1 warm=  34
+=== 캐스트 2 (42장)
+          _00070_20s.png label= 20 read=  19 warm   thr= 58 conf=0.82 n=2 warm=  36
+          _00071_20s.png label= 20 read=  19 bright thr= 96 conf=0.79 n=2 warm=  36
+          _00072_19s.png label= 19 read=   1 warm   thr= 38 conf=1.00 n=1 warm=  34  <== 모순
+          _00073_19s.png label= 19 read=   1 warm   thr= 38 conf=1.00 n=1 warm=  34
+          _00074_18s.png label= 18 read=  18 bright thr= 94 conf=0.83 n=2 warm=  38  <== 모순
+          _00075_18s.png label= 18 read=  17 chroma thr= 46 conf=0.84 n=2 warm=  37
+          _00076_18s.png label= 18 read=  17 bright thr= 92 conf=0.78 n=2 warm=  39
+          _00077_17s.png label= 17 read=   1 chroma thr= 34 conf=1.00 n=1 warm=  37  <== 모순
+          _00078_17s.png label= 17 read=  16 chroma thr= 60 conf=0.80 n=2 warm=  34  <== 모순
+          _00079_16s.png label= 16 read=   1 chroma thr= 37 conf=1.00 n=1 warm=  35  <== 모순
+          _00080_16s.png label= 16 read=  15 bright thr= 92 conf=0.80 n=2 warm=  38  <== 모순
+          _00081_16s.png label= 16 read=   1 chroma thr= 37 conf=0.84 n=1 warm=  33  <== 모순
+          _00082_15s.png label= 15 read=  14 warm   thr= 34 conf=0.78 n=2 warm=  41  <== 모순
+          _00083_15s.png label= 15 read=None bright thr= 55 conf=0.70 n=2 warm=  37
+          _00084_14s.png label= 14 read=None bright thr= 53 conf=0.70 n=2 warm=  40
+          _00085_14s.png label= 14 read=  13 bright thr= 90 conf=0.84 n=2 warm=  38
+          _00086_13s.png label= 13 read=  13 bright thr= 89 conf=0.84 n=2 warm=  34
+          _00087_13s.png label= 13 read=  12 warm   thr= 59 conf=0.78 n=2 warm=  34
+          _00088_13s.png label= 13 read=  12 bright thr=103 conf=0.73 n=2 warm=  24
+          _00089_12s.png label= 12 read=  11 warm   thr= 62 conf=1.00 n=2 warm=  28
+          _00090_12s.png label= 12 read=  11 warm   thr= 46 conf=1.00 n=2 warm=  35
+          _00091_11s.png label= 11 read=  11 warm   thr= 36 conf=1.00 n=2 warm=  36
+          _00092_11s.png label= 11 read=  10 bright thr= 91 conf=0.74 n=2 warm=  39
+          _00093_10s.png label= 10 read=  10 warm   thr= 57 conf=0.80 n=2 warm=  39
+          _00094_09s.png label=  9 read=   8 warm   thr= 39 conf=0.74 n=1 warm=  38  <== 모순
+          _00095_09s.png label=  9 read=   8 bright thr= 96 conf=0.74 n=1 warm=  31
+          _00096_08s.png label=  8 read=   8 bright thr= 96 conf=0.77 n=1 warm=  33
+          _00097_08s.png label=  8 read=   7 bright thr= 91 conf=0.83 n=1 warm=  34
+          _00098_07s.png label=  7 read=   7 bright thr= 91 conf=0.76 n=1 warm=  32
+          _00099_07s.png label=  7 read=None bright thr= 68 conf=0.54 n=1 warm=  40
+          _00100_07s.png label=  7 read=None warm   thr= 45 conf=0.51 n=1 warm=  38
+          _00101_06s.png label=  6 read=None bright thr= 91 conf=0.58 n=1 warm=  39
+          _00102_06s.png label=  6 read=None bright thr= 93 conf=0.61 n=1 warm=  40
+          _00103_05s.png label=  5 read=None bright thr= 53 conf=0.64 n=1 warm=  37
+          _00104_05s.png label=  5 read=   4 warm   thr= 39 conf=0.78 n=1 warm=  34  <== 모순
+          _00105_04s.png label=  4 read=None warm   thr= 59 conf=0.67 n=1 warm=  35
+          _00106_04s.png label=  4 read=None chroma thr= 45 conf=0.51 n=1 warm=  80
+          _00107_03s.png label=  3 read=None warm   thr= 46 conf=0.60 n=1 warm=  36
+          _00108_03s.png label=  3 read=None warm   thr= 58 conf=0.62 n=1 warm=  37
+          _00109_02s.png label=  2 read=   1 warm   thr= 57 conf=1.00 n=1 warm=  47  <== 모순
+          _00110_02s.png label=  2 read=   1 warm   thr= 38 conf=1.00 n=1 warm=  18
+          _00111_01s.png label=  1 read=   1 warm   thr= 60 conf=1.00 n=1 warm=  31
+=== 캐스트 3 (41장)
+          _00001_20s.png label= 20 read=  19 warm   thr= 44 conf=0.86 n=2 warm= -30
+          _00002_20s.png label= 20 read=None chroma thr= 82 conf=0.70 n=2 warm= -30
+          _00003_19s.png label= 19 read=None chroma thr= 76 conf=0.61 n=2 warm= -20
+          _00004_19s.png label= 19 read=  18 chroma thr= 76 conf=1.00 n=2 warm= -17
+          _00005_18s.png label= 18 read=  17 warm   thr= 54 conf=0.77 n=2 warm= -22
+          _00006_18s.png label= 18 read=  17 warm   thr= 72 conf=0.84 n=2 warm= -30
+          _00007_17s.png label= 17 read=  16 chroma thr= 80 conf=0.88 n=2 warm= -25
+          _00008_17s.png label= 17 read=  16 chroma thr= 81 conf=1.00 n=2 warm= -29
+          _00009_16s.png label= 16 read=  16 warm   thr= 43 conf=0.88 n=2 warm= -26
+          _00010_16s.png label= 16 read=  15 warm   thr= 43 conf=1.00 n=2 warm= -28
+          _00011_15s.png label= 15 read=  15 chroma thr= 59 conf=1.00 n=2 warm= -21
+          _00012_15s.png label= 15 read=  14 chroma thr= 79 conf=1.00 n=2 warm= -23
+          _00013_15s.png label= 15 read=  14 chroma thr= 61 conf=1.00 n=2 warm= -24
+          _00014_14s.png label= 14 read=  13 warm   thr= 53 conf=1.00 n=2 warm= -17
+          _00015_14s.png label= 14 read=  13 chroma thr= 60 conf=1.00 n=2 warm= -26
+          _00016_13s.png label= 13 read=  13 chroma thr= 59 conf=1.00 n=2 warm= -19
+          _00017_13s.png label= 13 read=   1 chroma thr= 60 conf=1.00 n=1 warm= -26  <== 모순
+          _00018_12s.png label= 12 read=  12 chroma thr= 82 conf=0.85 n=2 warm= -27  <== 모순
+          _00019_12s.png label= 12 read=  11 warm   thr= 42 conf=1.00 n=2 warm= -25
+          _00020_12s.png label= 12 read=  11 warm   thr= 54 conf=1.00 n=2 warm= -20
+          _00021_11s.png label= 11 read=  10 warm   thr= 55 conf=1.00 n=2 warm= -22
+          _00022_11s.png label= 11 read=  10 warm   thr= 53 conf=1.00 n=2 warm= -21
+          _00023_09s.png label=  9 read=   9 warm   thr= 50 conf=1.00 n=1 warm= -30
+          _00024_09s.png label=  9 read=   8 warm   thr= 65 conf=0.83 n=1 warm= -27
+          _00025_09s.png label=  9 read=   8 warm   thr= 65 conf=0.77 n=1 warm= -22
+          _00026_08s.png label=  8 read=   7 bright thr= 96 conf=0.79 n=1 warm= -19
+          _00027_08s.png label=  8 read=   7 warm   thr= 50 conf=0.83 n=1 warm= -27
+          _00028_07s.png label=  7 read=   7 warm   thr= 50 conf=0.83 n=1 warm= -22
+          _00029_07s.png label=  7 read=None warm   thr= 38 conf=0.59 n=1 warm= -16
+          _00030_07s.png label=  7 read=   6 warm   thr= 49 conf=0.80 n=1 warm= -24
+          _00031_06s.png label=  6 read=   5 chroma thr= 78 conf=0.83 n=1 warm= -23
+          _00032_06s.png label=  6 read=   5 chroma thr= 62 conf=1.00 n=1 warm= -26
+          _00033_05s.png label=  5 read=   5 chroma thr= 79 conf=0.85 n=1 warm= -28
+          _00034_05s.png label=  5 read=   4 warm   thr= 53 conf=1.00 n=1 warm= -23
+          _00035_04s.png label=  4 read=   4 warm   thr= 54 conf=1.00 n=1 warm= -29
+          _00036_04s.png label=  4 read=   3 warm   thr= 48 conf=0.85 n=1 warm= -22
+          _00037_04s.png label=  4 read=None chroma thr= 59 conf=0.66 n=1 warm= -30
+          _00038_03s.png label=  3 read=None chroma thr= 79 conf=0.61 n=1 warm= -14
+          _00039_03s.png label=  3 read=None warm   thr= 53 conf=0.61 n=1 warm= -12
+          _00040_02s.png label=  2 read=   1 warm   thr= 53 conf=1.00 n=1 warm= -17  <== 모순
+          _00041_02s.png label=  2 read=   1 warm   thr= 54 conf=1.00 n=1 warm= -23
+=== 캐스트 4 (42장)
+          _00001_20s.png label= 20 read=None warm   thr= 53 conf=0.66 n=2 warm=  -5
+          _00002_20s.png label= 20 read=None warm   thr= 43 conf=0.65 n=2 warm= -22
+          _00003_19s.png label= 19 read=  18 chroma thr= 80 conf=1.00 n=2 warm= -30
+          _00004_19s.png label= 19 read=  18 bright thr= 94 conf=0.85 n=2 warm= -15
+          _00005_19s.png label= 19 read=  18 warm   thr= 55 conf=0.70 n=2 warm= -26
+          _00006_18s.png label= 18 read=  17 chroma thr= 58 conf=0.87 n=2 warm= -12
+          _00007_18s.png label= 18 read=  17 chroma thr= 79 conf=0.84 n=2 warm= -24
+          _00008_17s.png label= 17 read=  16 bright thr= 60 conf=0.79 n=2 warm= -11
+          _00009_17s.png label= 17 read=  16 chroma thr= 73 conf=0.88 n=2 warm= -11
+          _00010_16s.png label= 16 read=  15 chroma thr= 60 conf=1.00 n=2 warm= -28
+          _00011_16s.png label= 16 read=  15 chroma thr= 49 conf=0.82 n=2 warm= -31
+          _00012_15s.png label= 15 read=  15 warm   thr= 53 conf=1.00 n=2 warm= -21
+          _00013_15s.png label= 15 read=None bright thr= 55 conf=0.70 n=2 warm= -19
+          _00014_15s.png label= 15 read=  14 chroma thr= 68 conf=1.00 n=2 warm=  -9
+          _00015_14s.png label= 14 read=  13 chroma thr= 61 conf=1.00 n=2 warm= -27
+          _00016_14s.png label= 14 read=  13 chroma thr= 62 conf=1.00 n=2 warm= -30
+          _00017_13s.png label= 13 read=  12 bright thr=102 conf=0.81 n=2 warm= -10
+          _00018_13s.png label= 13 read=  12 bright thr=102 conf=0.81 n=2 warm= -10
+          _00019_12s.png label= 12 read=  12 bright thr=100 conf=0.81 n=2 warm= -11
+          _00020_12s.png label= 12 read=  11 warm   thr= 53 conf=1.00 n=2 warm= -10
+          _00021_12s.png label= 12 read=  11 warm   thr= 42 conf=1.00 n=2 warm= -11
+          _00022_11s.png label= 11 read=  10 warm   thr= 42 conf=1.00 n=2 warm= -11
+          _00023_11s.png label= 11 read=  10 warm   thr= 42 conf=1.00 n=2 warm= -10
+          _00024_09s.png label=  9 read=   8 warm   thr= 50 conf=0.70 n=1 warm= -10  <== 모순
+          _00025_09s.png label=  9 read=   8 warm   thr= 39 conf=0.73 n=1 warm= -11
+          _00026_08s.png label=  8 read=   7 bright thr= 82 conf=0.79 n=1 warm= -23
+          _00027_08s.png label=  8 read=   7 chroma thr= 52 conf=1.00 n=1 warm=  -7
+          _00028_07s.png label=  7 read=   6 chroma thr= 68 conf=1.00 n=1 warm= -12
+          _00029_07s.png label=  7 read=   6 bright thr= 91 conf=0.70 n=1 warm= -11
+          _00030_06s.png label=  6 read=   6 chroma thr= 52 conf=0.79 n=1 warm= -12
+          _00031_06s.png label=  6 read=   5 warm   thr= 67 conf=1.00 n=1 warm= -12
+          _00032_06s.png label=  6 read=   5 chroma thr= 52 conf=1.00 n=1 warm= -13
+          _00033_05s.png label=  5 read=   4 warm   thr= 53 conf=1.00 n=1 warm= -13
+          _00034_05s.png label=  5 read=   4 warm   thr= 54 conf=1.00 n=1 warm= -21
+          _00035_04s.png label=  4 read=   3 warm   thr= 48 conf=1.00 n=1 warm= -24
+          _00036_04s.png label=  4 read=   3 chroma thr= 80 conf=0.85 n=1 warm= -25
+          _00037_04s.png label=  4 read=   3 bright thr= 88 conf=0.79 n=1 warm= -23
+          _00038_03s.png label=  3 read=None bright thr= 96 conf=0.60 n=1 warm= -11
+          _00039_03s.png label=  3 read=None bright thr= 92 conf=0.58 n=1 warm= -24
+          _00040_02s.png label=  2 read=   1 warm   thr= 54 conf=1.00 n=1 warm= -25  <== 모순
+          _00041_02s.png label=  2 read=   1 warm   thr= 53 conf=1.00 n=1 warm= -20
+          _00042_01s.png label=  1 read=None warm   thr= 65 conf=0.00 n=0 warm= -23

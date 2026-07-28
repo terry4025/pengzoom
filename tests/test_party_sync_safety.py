@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 import tempfile
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 from PyQt6.QtWidgets import QApplication
 
+import magnifier  # noqa: E402
 from cooldown_detector import CooldownDetector  # noqa: E402
 from magnifier import MagnifierWindow, PartyPanel  # noqa: E402
 
@@ -194,6 +196,264 @@ class PartySyncSafetyTests(unittest.TestCase):
         widgets = panel.widgets["player"]["skill_widgets"]["skill"]
         self.assertAlmostEqual(widgets["cooldown_deadline"], started_at + 40, places=3)
         self.assertEqual(widgets["cycle_total"], 30)
+        panel.close()
+
+    def test_repeated_keypress_during_cooldown_does_not_restart_the_timer(self):
+        """쿨타임 중에 키를 또 눌러도 남은 시간이 되돌아가면 안 된다.
+
+        스킬 키를 연타하거나 누른 채로 두면 pynput이 같은 키를 계속 보고한다.
+        예전에는 그 입력마다 수동 타이머를 다시 시작해서, 진행 바가 0까지
+        내려가지 못하고 중간에서 계속 처음 위치로 튀었다.
+        """
+        detector = CooldownDetector()
+        detector.add_slot("skill", (0, 0, 10, 10), cooldown_duration=30)
+        slot = detector.slots["skill"]
+
+        first = time.time()
+        detector.request_trigger("skill", trigger_monotonic=time.monotonic())
+        detector._drain_trigger_requests()
+        started_at = slot.cooldown_start_time
+        self.assertGreater(started_at, 0.0)
+
+        # 10초 지난 시점의 연타 입력 3번.
+        slot.cooldown_start_time = first - 10.0
+        for _ in range(3):
+            detector.request_trigger("skill", trigger_monotonic=time.monotonic())
+        detector._drain_trigger_requests()
+
+        self.assertAlmostEqual(slot.cooldown_start_time, first - 10.0, places=3)
+        self.assertAlmostEqual(detector.get_remaining_seconds_precise("skill"), 20.0, delta=0.5)
+
+    def test_keypress_after_ready_restarts_the_timer(self):
+        """반대로 스킬이 사용 가능해진 뒤의 입력은 정상적으로 새 쿨타임을 건다."""
+        detector = CooldownDetector()
+        detector.add_slot("skill", (0, 0, 10, 10), cooldown_duration=30)
+        slot = detector.slots["skill"]
+        slot.cooldown_start_time = time.time() - 40.0     # 이미 끝난 쿨타임
+
+        detector.request_trigger("skill", trigger_monotonic=time.monotonic())
+        detector._drain_trigger_requests()
+
+        self.assertAlmostEqual(detector.get_remaining_seconds_precise("skill"), 30.0, delta=0.5)
+
+    def test_charge_skill_recognized_as_ready_can_restart_early(self):
+        """차지/게이지 스킬처럼 아직 사용 가능해 보이면 재사용을 허용한다."""
+        detector = CooldownDetector()
+        detector.add_slot("skill", (0, 0, 10, 10), cooldown_duration=30)
+        slot = detector.slots["skill"]
+        slot.cooldown_start_time = time.time() - 10.0
+        slot.is_ready = True
+
+        detector.request_trigger("skill", trigger_monotonic=time.monotonic())
+        detector._drain_trigger_requests()
+
+        self.assertAlmostEqual(detector.get_remaining_seconds_precise("skill"), 30.0, delta=0.5)
+
+    def test_local_skill_bar_ignores_round_trip_report_noise(self):
+        """내 스킬 진행 바는 서버 왕복 보고가 흔들려도 로컬 타이머만 따른다.
+
+        키를 다시 누르지 않았는데도 바가 조금씩 되돌아가던 증상의 대책이다.
+        보고에는 왕복 지연·서버 시각 보정·반올림 오차가 섞이지만, 내 쿨타임은
+        이미 이 PC에 정확한 값으로 있으므로 그것을 그대로 쓴다.
+        """
+        detector = CooldownDetector()
+        detector.add_slot("구원", (0, 0, 10, 10), cooldown_duration=30)
+        slot = detector.slots["구원"]
+        start = 3000.0
+        slot.cooldown_start_time = start
+
+        panel = PartyPanel()
+        panel.timer.stop()
+        # closeEvent 가 parent_window.save_settings() 를 부르므로 함께 넣어 준다.
+        panel.parent_window = SimpleNamespace(
+            player_name="펭구", detector=detector, save_settings=lambda: None)
+        clock = {"now": start}
+        # 보고 시각이 앞뒤로 튀고 남은 초도 정수로 반올림되어 들어온다.
+        noise = [0.0, 0.9, -0.7, 1.1, -1.2, 0.6, -0.9, 1.3]
+
+        with patch("magnifier.time.time", lambda: clock["now"]):
+            values = []
+            for step in range(0, 15):
+                clock["now"] = start + step * 2.0
+                remaining = max(0.0, 30.0 - (clock["now"] - start))
+                panel.update_states({"펭구": {
+                    "_class": "테스트",
+                    "구원": {
+                        "is_ready": False,
+                        "cooldown_duration": math.ceil(remaining),
+                        "timestamp": clock["now"] + noise[step % len(noise)],
+                    }}})
+                for _ in range(4):
+                    clock["now"] += 0.5
+                    panel.tick_timers()
+                    values.append(panel.widgets["펭구"]["skill_widgets"]["구원"]["progress"].value)
+
+            widgets = panel.widgets["펭구"]["skill_widgets"]["구원"]
+            # 분모는 보고된 '남은 초'가 아니라 실제 총 쿨타임이어야 한다.
+            self.assertAlmostEqual(widgets["cycle_total"], 30.0, places=3)
+            self.assertAlmostEqual(widgets["cooldown_deadline"], start + 30.0, places=3)
+
+        backwards = [(a, b) for a, b in zip(values, values[1:]) if b > a + 1e-6]
+        self.assertFalse(backwards, f"진행 바가 되돌아갔습니다: {backwards[:3]}")
+        self.assertLessEqual(values[-1], 1.0)
+        panel.close()
+
+    def test_transient_missing_skill_does_not_reset_the_cycle(self):
+        """보고에서 한 번 빠진 스킬 때문에 사이클이 리셋되면 안 된다."""
+        panel = PartyPanel()
+        panel.timer.stop()
+        start = 4000.0
+        clock = {"now": start}
+        with patch("magnifier.time.time", lambda: clock["now"]):
+            panel.update_states({"펭구": {"_class": "테스트", "구원": {
+                "is_ready": False, "cooldown_duration": 30, "timestamp": start}}})
+            clock["now"] = start + 15.0
+            panel.tick_timers()
+            before = panel.widgets["펭구"]["skill_widgets"]["구원"]["progress"].value
+
+            # 스냅샷이 한 번 스킬을 빼먹고 온다.
+            panel.update_states({"펭구": {"_class": "테스트"}})
+            self.assertIn("구원", panel.widgets["펭구"]["skill_widgets"])
+
+            panel.update_states({"펭구": {"_class": "테스트", "구원": {
+                "is_ready": False, "cooldown_duration": 15, "timestamp": clock["now"]}}})
+            panel.tick_timers()
+            after = panel.widgets["펭구"]["skill_widgets"]["구원"]["progress"].value
+
+        self.assertLessEqual(after, before + 1e-6, "위젯이 새로 만들어져 바가 다시 찼습니다.")
+        panel.close()
+
+    def test_manual_cooldown_bar_never_moves_backwards(self):
+        """수동 쿨타임 진행 바는 0까지 한 방향으로만 줄어야 한다.
+
+        동기화 보고는 '남은 초'를 2초마다 실어 보내는데, 정수 반올림과 서버
+        시각 보정 오차가 겹치면 수신 측이 계산한 종료 시각이 매번 조금씩
+        달라진다. 예전에는 그 차이를 '재사용'으로 오인해 사이클을 다시 걸었고,
+        진행 바가 쿨타임 도중 계속 앞쪽으로 되돌아갔다.
+        """
+        panel = PartyPanel()
+        panel.timer.stop()
+        start = 1000.0
+        clock = {"now": start}
+        total = 30.0
+        jitter = [0.0, 0.42, -0.38, 0.5, -0.47, 0.31, -0.29, 0.48]
+
+        def report(remaining, stamp):
+            panel.update_states({
+                "player": {
+                    "_class": "테스트",
+                    "skill": {
+                        "is_ready": False,
+                        # 예전 송신부가 그랬듯 정수로 올림해서 보낸다.
+                        "cooldown_duration": math.ceil(remaining),
+                        "timestamp": stamp,
+                    }
+                }
+            })
+
+        with patch("magnifier.time.time", lambda: clock["now"]):
+            report(total, start)
+            panel.tick_timers()
+            gauge = panel.widgets["player"]["skill_widgets"]["skill"]["progress"]
+            values = [gauge.value]
+            for step in range(1, 16):
+                clock["now"] = start + step * 2.0
+                remaining = max(0.0, total - (clock["now"] - start))
+                report(remaining, clock["now"] + jitter[step % len(jitter)])
+                for _ in range(4):
+                    clock["now"] += 0.5
+                    panel.tick_timers()
+                    values.append(gauge.value)
+
+        backwards = [(before, after) for before, after in zip(values, values[1:])
+                     if after > before + 1e-6]
+        self.assertFalse(backwards, f"진행 바가 되돌아갔습니다: {backwards[:3]}")
+        self.assertLessEqual(values[-1], 1.0, f"0까지 줄지 않았습니다: {values[-1]}")
+        panel.close()
+
+    def test_real_recast_refills_the_bar(self):
+        """반대로 실제 재사용은 사이클을 새로 시작해 바를 다시 채워야 한다."""
+        panel = PartyPanel()
+        panel.timer.stop()
+        start = 2000.0
+        clock = {"now": start}
+        with patch("magnifier.time.time", lambda: clock["now"]):
+            panel.update_states({"player": {"skill": {
+                "is_ready": False, "cooldown_duration": 30, "timestamp": start}}})
+            panel.tick_timers()
+            clock["now"] = start + 20.0
+            panel.tick_timers()
+            gauge = panel.widgets["player"]["skill_widgets"]["skill"]["progress"]
+            self.assertLess(gauge.value, 40.0)
+            # 쿨타임 도중 다시 사용: 남은 시간이 크게 늘어난다.
+            panel.update_states({"player": {"skill": {
+                "is_ready": False, "cooldown_duration": 30, "timestamp": clock["now"]}}})
+            panel.tick_timers()
+            self.assertGreater(gauge.value, 95.0)
+        panel.close()
+
+    def test_sync_sends_precise_remaining_when_available(self):
+        detector = CooldownDetector()
+        detector.add_slot("skill", (0, 0, 10, 10), cooldown_duration=30)
+        slot = detector.slots["skill"]
+        slot.cooldown_start_time = time.time() - 10.4
+
+        precise = magnifier.sync_remaining_seconds(detector, "skill")
+
+        self.assertAlmostEqual(precise, 19.6, delta=0.2)
+        self.assertNotEqual(precise, detector.get_remaining_seconds("skill"))
+
+    def test_skill_name_replaces_the_cd_and_rdy_labels(self):
+        """RDY/CD 자리에는 사용자가 설정해 둔 스킬 이름이 상태색으로 들어간다."""
+        panel = PartyPanel()
+        panel.timer.stop()
+        panel.update_states({
+            "player": {
+                "천상의 축복": {"is_ready": True, "cooldown_duration": 0, "timestamp": time.time()},
+                "구원": {"is_ready": False, "cooldown_duration": 0, "timestamp": time.time()},
+            }
+        })
+        panel.tick_timers()
+        widgets = panel.widgets["player"]["skill_widgets"]
+
+        text, colour, kind = panel._skill_status("천상의 축복", widgets["천상의 축복"], False)
+        self.assertEqual((text, kind), ("천상의 축복", "name"))
+        self.assertEqual(colour.name(), panel._c_ready.name())
+
+        text, colour, kind = panel._skill_status("구원", widgets["구원"], False)
+        self.assertEqual((text, kind), ("구원", "name"))
+        self.assertEqual(colour.name(), panel._c_busy.name())
+        self.assertNotEqual(colour.name(), panel._c_ready.name())
+        panel.close()
+
+    def test_known_seconds_still_show_the_number(self):
+        panel = PartyPanel()
+        panel.timer.stop()
+        now = time.time()
+        panel.update_states({"player": {"구원": {
+            "is_ready": False, "cooldown_duration": 30, "timestamp": now}}})
+        panel.tick_timers()
+        widgets = panel.widgets["player"]["skill_widgets"]["구원"]
+
+        text, _colour, kind = panel._skill_status("구원", widgets, False)
+
+        self.assertEqual(kind, "number")
+        self.assertEqual(text, "30")
+        panel.close()
+
+    def test_icons_only_mode_keeps_the_short_labels(self):
+        """'아이콘만' 모드는 이름을 숨기는 설정이므로 약어를 유지한다."""
+        panel = PartyPanel()
+        panel.timer.stop()
+        panel.display_mode = "아이콘만"
+        panel.update_states({"player": {"구원": {
+            "is_ready": True, "cooldown_duration": 0, "timestamp": time.time()}}})
+        panel.tick_timers()
+        widgets = panel.widgets["player"]["skill_widgets"]["구원"]
+
+        text, _colour, kind = panel._skill_status("구원", widgets, False)
+
+        self.assertEqual((text, kind), ("RDY", "label"))
         panel.close()
 
     def test_malformed_skill_state_is_ignored(self):

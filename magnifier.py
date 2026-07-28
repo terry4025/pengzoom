@@ -1188,6 +1188,78 @@ THEMES = {
         "card_border": "1px solid rgba(255, 255, 255, 0.03)",
         "shadow": "rgba(255, 59, 48, 0.06)",
         "font_color": "#f5f5f7"
+    },
+    "미드나이트 오션": {
+        "bg": "rgba(11, 21, 36, 0.92)",
+        "border": "1.2px solid rgba(100, 210, 255, 0.14)",
+        "accent": "#64d2ff",        # Cyan
+        "accent_secondary": "#8ea3b8",
+        "ready": "#30d158",
+        "cooldown": "#ffd60a",
+        "card_bg": "rgba(255, 255, 255, 0.02)",
+        "card_border": "1px solid rgba(255, 255, 255, 0.03)",
+        "shadow": "rgba(0, 0, 0, 0.5)",
+        "font_color": "#eaf3ff"
+    },
+    "포레스트 나이트": {
+        "bg": "rgba(13, 26, 20, 0.93)",
+        "border": "1.2px solid rgba(50, 215, 75, 0.14)",
+        "accent": "#5ac8fa",
+        "accent_secondary": "#9bb3a4",
+        "ready": "#32d74b",
+        "cooldown": "#ff9f0a",
+        "card_bg": "rgba(255, 255, 255, 0.02)",
+        "card_border": "1px solid rgba(255, 255, 255, 0.03)",
+        "shadow": "rgba(0, 0, 0, 0.5)",
+        "font_color": "#e9f6ec"
+    },
+    "로열 바이올렛": {
+        "bg": "rgba(24, 18, 38, 0.93)",
+        "border": "1.2px solid rgba(191, 90, 242, 0.18)",
+        "accent": "#bf5af2",
+        "accent_secondary": "#a99cb8",
+        "ready": "#30d158",
+        "cooldown": "#ff9f0a",
+        "card_bg": "rgba(255, 255, 255, 0.02)",
+        "card_border": "1px solid rgba(255, 255, 255, 0.03)",
+        "shadow": "rgba(0, 0, 0, 0.5)",
+        "font_color": "#f2ecff"
+    },
+    "그래파이트": {
+        "bg": "rgba(24, 24, 26, 0.94)",
+        "border": "1.2px solid rgba(255, 255, 255, 0.10)",
+        "accent": "#a1a1a6",
+        "accent_secondary": "#8e8e93",
+        "ready": "#30d158",
+        "cooldown": "#ff9f0a",
+        "card_bg": "rgba(255, 255, 255, 0.02)",
+        "card_border": "1px solid rgba(255, 255, 255, 0.04)",
+        "shadow": "rgba(0, 0, 0, 0.55)",
+        "font_color": "#f5f5f7"
+    },
+    "아이스 라이트": {
+        "bg": "rgba(231, 239, 250, 0.93)",
+        "border": "1.2px solid rgba(0, 0, 0, 0.07)",
+        "accent": "#0a6cff",
+        "accent_secondary": "#6b7a90",
+        "ready": "#248a3d",
+        "cooldown": "#c25e00",
+        "card_bg": "rgba(0, 0, 0, 0.01)",
+        "card_border": "1px solid rgba(0, 0, 0, 0.02)",
+        "shadow": "rgba(0, 0, 0, 0.10)",
+        "font_color": "#16233a"
+    },
+    "샌드 페이퍼": {
+        "bg": "rgba(247, 242, 233, 0.94)",
+        "border": "1.2px solid rgba(0, 0, 0, 0.07)",
+        "accent": "#a86400",
+        "accent_secondary": "#8a7c68",
+        "ready": "#248a3d",
+        "cooldown": "#c93400",
+        "card_bg": "rgba(0, 0, 0, 0.01)",
+        "card_border": "1px solid rgba(0, 0, 0, 0.02)",
+        "shadow": "rgba(0, 0, 0, 0.09)",
+        "font_color": "#2b2320"
     }
 }
 
@@ -1209,6 +1281,23 @@ THEMES = {
 _CSS_RGBA_RE = re.compile(
     r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)")
 _CSS_PX_RE = re.compile(r"([\d.]+)px")
+
+# 파티 동기화는 '남은 초'를 실어 보낸다. 반올림/네트워크 지연 때문에 같은
+# 쿨타임이라도 보고마다 종료 시각이 조금씩 달라지므로, 이 폭 안의 차이는
+# 흔들림으로 보고 무시한다. 이보다 크게 늘어난 값만 재사용으로 취급한다.
+HUD_DEADLINE_JITTER_SEC = 1.5
+HUD_RESTART_MARGIN_SEC = 2.5
+
+
+def sync_remaining_seconds(detector, name):
+    """파티에 보낼 남은 시간. 정밀 값이 있으면 그것을 쓴다."""
+    getter = getattr(detector, "get_remaining_seconds_precise", None)
+    if callable(getter):
+        try:
+            return round(max(0.0, float(getter(name))), 2)
+        except (TypeError, ValueError):
+            pass
+    return detector.get_remaining_seconds(name)
 
 
 def parse_css_color(value, fallback=None):
@@ -1385,6 +1474,9 @@ HUD_CARD_GAP = 8
 HUD_COMPACT_ROW_H = 50
 HUD_COMPACT_GAP = 4
 HUD_STALE_AFTER_SEC = 6.0     # 이 시간 동안 갱신이 없으면 오프라인으로 표시
+# 보고에서 잠깐 빠진 스킬을 곧바로 지우면 위젯이 새로 만들어지면서 진행 바
+# 사이클이 리셋된다. 이 시간 동안은 유예한다.
+HUD_SKILL_DROP_GRACE_SEC = 5.0
 
 # 약 30fps. 쿨타임 HUD에는 충분하고 기존 16ms 대비 이벤트 루프 부하가 절반이다.
 HUD_FRAME_INTERVAL_MS = 33
@@ -1462,6 +1554,10 @@ class PartyPanel(QWidget):
         self._c_cool = parse_css_color(theme.get("cooldown"), QColor(255, 159, 10))
         self._c_accent = parse_css_color(theme.get("accent"), QColor(10, 132, 255))
 
+        # 스킬 이름 상태색: 사용 가능=초록, 쿨타임=빨강. 게이지/숫자에 쓰는
+        # cooldown 색(테마에 따라 주황)과 달리 두 상태가 확실히 갈려야 한다.
+        self._c_busy = QColor(255, 69, 58)
+
         self._c_text_dim = QColor(self._c_text)
         self._c_text_dim.setAlpha(130)
         self._c_text_faint = QColor(self._c_text)
@@ -1509,7 +1605,7 @@ class PartyPanel(QWidget):
 
         # 배너는 자체 QSS를 쓰므로 팔레트와 배율만 넘겨 준다.
         self.boss_banner.apply_scale(self.ui_scale)
-        self.boss_banner.apply_theme(THEMES[self.theme_name])
+        self.boss_banner.apply_theme(THEMES.get(self.theme_name) or THEMES["옵시디언 글래스"])
 
         self._relayout()
         self._autofit_size()
@@ -1582,6 +1678,31 @@ class PartyPanel(QWidget):
 
     def _shows_names(self):
         return self.display_mode != "아이콘만"
+
+    def _skill_status(self, skill, s_widgets, stale):
+        """상태 슬롯에 무엇을 그릴지 결정한다.
+
+        남은 초를 아는 동안에는 숫자를, 모르는 동안에는 RDY/CD 같은 약어 대신
+        사용자가 설정해 둔 스킬 이름을 상태색(사용 가능=초록, 쿨타임=빨강)으로
+        보여준다. '아이콘만' 표시 모드에서는 이름을 숨기는 것이 설정 의도이므로
+        기존 약어를 유지한다.
+
+        Returns:
+            (문자열, 색, 종류) - 종류는 "number" | "name" | "label"
+        """
+        is_ready = bool(s_widgets.get("is_ready"))
+        raw = s_widgets["status_text_lbl"].text()
+        numeric = raw.endswith("s") and not is_ready
+        if numeric:
+            return raw[:-1], (self._c_text_faint if stale else self._c_cool), "number"
+        if not self._shows_names():
+            return ("RDY" if is_ready else "CD"), \
+                (self._c_text_faint if stale else (self._c_ready if is_ready else self._c_cool)), "label"
+        if stale:
+            colour = self._c_text_faint
+        else:
+            colour = self._c_ready if is_ready else self._c_busy
+        return str(skill), colour, "name"
 
     def _relayout(self):
         """카드/행 사각형을 미리 계산해 paintEvent가 산술만 하도록 만든다."""
@@ -1677,6 +1798,33 @@ class PartyPanel(QWidget):
         # 숨겨진 패널이 계속 프레임을 돌리지 않게 한다.
         self.timer.stop()
         super().hideEvent(event)
+    def _local_manual_cooldown(self, player, skill):
+        """내 캐릭터 스킬이면 로컬 수동 타이머를 그대로 쓴다.
+
+        내 쿨타임은 이미 이 PC에 정확한 값(시작 시각 + 총 쿨타임)으로 있는데,
+        예전에는 그걸 서버로 보냈다가 되돌아온 '남은 초' 보고로 다시 복원했다.
+        왕복 지연·서버 시각 보정·반올림이 섞이면 종료 시각이 보고마다 미세하게
+        달라지고, 그 차이가 진행 바를 조금씩 되돌린다. 왕복을 아예 빼면 그
+        원인이 전부 사라진다.
+
+        Returns:
+            (종료 시각, 총 쿨타임) 또는 None
+        """
+        window = self.parent_window
+        if not window or not player:
+            return None
+        if player != getattr(window, "player_name", ""):
+            return None
+        detector = getattr(window, "detector", None)
+        slot = getattr(detector, "slots", {}).get(skill) if detector else None
+        if slot is None:
+            return None
+        started = float(getattr(slot, "cooldown_start_time", 0.0) or 0.0)
+        total = float(getattr(slot, "cooldown_duration", 0.0) or 0.0)
+        if started <= 0.0 or total <= 0.0:
+            return None
+        return started + total, total
+
     def update_states(self, party_states):
         received_at = time.time()
         if not isinstance(party_states, dict):
@@ -1716,9 +1864,17 @@ class PartyPanel(QWidget):
                 p_data["emblem"] = self._resolve_emblem(class_name, player)
 
             skill_map = skills if isinstance(skills, dict) else {}
-            for dropped in list(p_data["skill_widgets"].keys()):
-                if dropped not in skill_map:
-                    del p_data["skill_widgets"][dropped]
+            # 한 프레임 빠진 스킬을 곧바로 지우면 위젯이 새로 만들어지면서
+            # 진행 바 사이클이 리셋된다. 잠깐 사라진 건 유예한다.
+            missing_since = p_data.setdefault("missing_since", {})
+            for known in list(p_data["skill_widgets"].keys()):
+                if known in skill_map:
+                    missing_since.pop(known, None)
+                    continue
+                first_missing = missing_since.setdefault(known, received_at)
+                if received_at - first_missing >= HUD_SKILL_DROP_GRACE_SEC:
+                    del p_data["skill_widgets"][known]
+                    missing_since.pop(known, None)
 
             latest_timestamp = 0.0
             for skill, s_info in skill_map.items():
@@ -1739,6 +1895,10 @@ class PartyPanel(QWidget):
                     if not is_ready and cooldown_duration > 0.0
                     else 0.0
                 )
+                # 내 스킬은 왕복 보고 대신 로컬 수동 타이머를 그대로 쓴다.
+                local_manual = None if is_ready else self._local_manual_cooldown(player, skill)
+                if local_manual is not None:
+                    reported_deadline, cooldown_duration = local_manual[0], local_manual[1]
 
                 if skill not in p_data["skill_widgets"]:
                     glow = ReadyPulse(self._c_ready.name())
@@ -1754,6 +1914,9 @@ class PartyPanel(QWidget):
                         "timestamp": timestamp,
                         "cycle_total": cooldown_duration if not is_ready else 0.0,
                         "cooldown_deadline": reported_deadline,
+                        "cycle_seq": 1,
+                        "gauge_pct": None,
+                        "gauge_seq": 0,
                         "flash_val": 0.0,
                         "was_ready": is_ready
                     }
@@ -1762,13 +1925,17 @@ class PartyPanel(QWidget):
                     previous_ready = bool(s_widgets.get("is_ready", False))
                     previous_total = max(0.0, float(s_widgets.get("cycle_total", 0.0) or 0.0))
                     previous_deadline = max(0.0, float(s_widgets.get("cooldown_deadline", 0.0) or 0.0))
-                    expected_remaining = max(0.0, previous_deadline - received_at)
+                    started_new_cycle = False
+                    # 늘어난 폭으로 재사용을 판정한다. 남은 시간을 반올림해서
+                    # 보내던 시절에는 이 판정이 흔들림에도 걸려, 진행 바가
+                    # 쿨타임 도중에 계속 앞쪽으로 되돌아갔다.
+                    deadline_delta = (reported_deadline - previous_deadline
+                                      if reported_deadline > 0.0 and previous_deadline > 0.0
+                                      else 0.0)
                     restarted_while_cooldown = (
                         reported_deadline > 0.0
-                        and (
-                            previous_deadline <= received_at
-                            or cooldown_duration > expected_remaining + 1.25
-                        )
+                        and (previous_deadline <= received_at
+                             or deadline_delta > HUD_RESTART_MARGIN_SEC)
                     )
 
                     if is_ready:
@@ -1778,30 +1945,37 @@ class PartyPanel(QWidget):
                         # A Ready -> Cooldown transition starts a new visual cycle.
                         cycle_total = cooldown_duration
                         cooldown_deadline = reported_deadline
+                        started_new_cycle = True
                     elif restarted_while_cooldown:
                         # Gauge skills or cooldown resets can start another cycle
                         # without a debounced Ready frame between the two uses.
-                        # A meaningful increase beyond the expected remaining
-                        # time re-latches the total and deadline.
                         cycle_total = cooldown_duration
                         cooldown_deadline = reported_deadline
+                        started_new_cycle = True
                     else:
                         # Periodic sync reports the *remaining* seconds.  Keep the
-                        # first total as the ring denominator and only allow the
-                        # estimated deadline to move earlier (OCR cooldown cut).
+                        # first total as the ring denominator, ignore differences
+                        # inside the jitter band, and only ever move the deadline
+                        # earlier (OCR / manual cooldown cut short).
                         cycle_total = max(previous_total, cooldown_duration)
-                        if previous_deadline > 0.0 and reported_deadline > 0.0:
-                            cooldown_deadline = min(previous_deadline, reported_deadline)
-                        elif previous_deadline > 0.0:
-                            cooldown_deadline = previous_deadline
-                        else:
+                        if previous_deadline <= 0.0:
                             cooldown_deadline = reported_deadline
+                        elif reported_deadline <= 0.0:
+                            cooldown_deadline = previous_deadline
+                        elif reported_deadline < previous_deadline - HUD_DEADLINE_JITTER_SEC:
+                            cooldown_deadline = reported_deadline
+                        else:
+                            cooldown_deadline = previous_deadline
 
                     s_widgets["is_ready"] = is_ready
                     s_widgets["cooldown_duration"] = cooldown_duration
                     s_widgets["timestamp"] = timestamp
                     s_widgets["cycle_total"] = cycle_total
                     s_widgets["cooldown_deadline"] = cooldown_deadline
+                    if started_new_cycle or is_ready:
+                        # 새 사이클에서는 진행 바를 다시 채워도 된다.
+                        s_widgets["cycle_seq"] = int(s_widgets.get("cycle_seq", 0)) + 1
+                        s_widgets["gauge_pct"] = None
 
             p_data["latest_timestamp"] = latest_timestamp
 
@@ -1855,6 +2029,8 @@ class PartyPanel(QWidget):
                 if is_ready:
                     s_widgets["glow"].show()
                     gauge.hide()
+                    gauge.setValue(0.0)
+                    s_widgets["gauge_pct"] = None
                     s_widgets["status_text_lbl"].setText("Ready")
                 else:
                     s_widgets["glow"].hide()
@@ -1862,6 +2038,14 @@ class PartyPanel(QWidget):
 
                     if cycle_total > 0.0 and remaining > 0.0:
                         pct = max(0.0, min(100.0, (remaining / cycle_total) * 100.0))
+                        # 한 사이클 안에서 진행 바는 절대 되돌아가지 않는다.
+                        # 동기화 보고가 조금 흔들려도 0까지 매끄럽게 줄어든다.
+                        cycle_seq = int(s_widgets.get("cycle_seq", 0))
+                        previous_pct = s_widgets.get("gauge_pct")
+                        if previous_pct is not None and s_widgets.get("gauge_seq") == cycle_seq:
+                            pct = min(pct, float(previous_pct))
+                        s_widgets["gauge_pct"] = pct
+                        s_widgets["gauge_seq"] = cycle_seq
                         gauge.setValue(pct)
 
                         if remaining >= 1.0:
@@ -1876,6 +2060,8 @@ class PartyPanel(QWidget):
                         # Ready 템플릿이 실제로 인식될 때까지 사용 불가로 남는다.
                         gauge.setValue(0.0)
                         gauge.setText("…")
+                        s_widgets["gauge_pct"] = 0.0
+                        s_widgets["gauge_seq"] = int(s_widgets.get("cycle_seq", 0))
                         s_widgets["status_text_lbl"].setText("Cooldown")
 
         if self.isVisible():
@@ -2062,6 +2248,7 @@ class PartyPanel(QWidget):
         flash = max(0.0, min(1.0, float(s_widgets.get("flash_val", 0.0) or 0.0)))
         gauge = s_widgets["progress"]
         accent = self._c_text_faint if stale else (self._c_ready if is_ready else self._c_cool)
+        value_text, value_colour, value_kind = self._skill_status(skill, s_widgets, stale)
 
         # Ready 행은 배경 틴트로 한 번 더 구분한다.
         if is_ready and not stale:
@@ -2079,33 +2266,38 @@ class PartyPanel(QWidget):
         text_rect = QRectF(rect.x(), rect.y(), rect.width(), text_h)
         track = QRectF(rect.x(), track_y, rect.width(), track_h)
 
-        if is_ready:
-            value_text = "READY"
-            value_font = self._font(7.5 * scale, 700)
+        if value_kind == "number":
+            value_font = self._font(9 * scale, 700, mono=True)
+            value_text = f"{value_text}s"
+        elif value_kind == "name":
+            value_font = self._font(9.5 * scale, 700)
         else:
-            raw = s_widgets["status_text_lbl"].text()
-            if raw.endswith("s"):
-                value_text = raw
-                value_font = self._font(9 * scale, 700, mono=True)
-            else:
-                value_text = "COOLDOWN"
-                value_font = self._font(7 * scale, 700)
+            value_font = self._font(7.5 * scale, 700)
+            value_text = "READY" if is_ready else "COOLDOWN"
 
-        value_w = 54 * scale
-        if show_names:
-            painter.setPen(QPen(self._c_text_faint if stale
-                                else (self._c_text if is_ready else self._c_text_dim)))
-            painter.setFont(self._font(9 * scale, 600))
-            name_w = max(20.0, text_rect.width() - value_w)
-            painter.drawText(QRectF(text_rect.x(), text_rect.y(), name_w, text_rect.height()),
-                             Qt.AlignmentFlag.AlignVCenter,
-                             self._elide(painter, skill, name_w))
+        if value_kind == "name":
+            # 남은 초를 모르는 동안에는 스킬 이름 자체가 상태 표시다.
+            # 행 전체를 이름에 쓰고 별도 이름표는 그리지 않는다.
+            painter.setFont(value_font)
+            painter.setPen(QPen(value_colour))
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter,
+                             self._elide(painter, value_text, text_rect.width()))
+        else:
+            value_w = 54 * scale
+            if show_names:
+                painter.setPen(QPen(self._c_text_faint if stale
+                                    else (self._c_text if is_ready else self._c_text_dim)))
+                painter.setFont(self._font(9 * scale, 600))
+                name_w = max(20.0, text_rect.width() - value_w)
+                painter.drawText(QRectF(text_rect.x(), text_rect.y(), name_w, text_rect.height()),
+                                 Qt.AlignmentFlag.AlignVCenter,
+                                 self._elide(painter, skill, name_w))
 
-        painter.setFont(value_font)
-        painter.setPen(QPen(accent))
-        painter.drawText(text_rect,
-                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                         value_text)
+            painter.setFont(value_font)
+            painter.setPen(QPen(value_colour))
+            painter.drawText(text_rect,
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             value_text)
 
         self._fill_round(painter, track, track_h / 2.0, self._c_track)
 
@@ -2182,11 +2374,11 @@ class PartyPanel(QWidget):
             cell_x += cell_w
 
     def _paint_skill_cell(self, painter, skill, s_widgets, cell, scale, stale):
-        show_names = self._shows_names()
         is_ready = bool(s_widgets.get("is_ready"))
         flash = max(0.0, min(1.0, float(s_widgets.get("flash_val", 0.0) or 0.0)))
         gauge = s_widgets["progress"]
         accent = self._c_text_faint if stale else (self._c_ready if is_ready else self._c_cool)
+        value_text, value_colour, value_kind = self._skill_status(skill, s_widgets, stale)
 
         if is_ready and not stale:
             self._fill_round(painter, cell, 4 * scale,
@@ -2197,7 +2389,9 @@ class PartyPanel(QWidget):
             self._fill_round(painter, cell, 4 * scale, self._c_chrome)
             self._stroke_round(painter, cell, 4 * scale, self._c_card_border, 1.0)
 
-        if show_names:
+        # 상태 슬롯이 이미 스킬 이름을 보여줄 때 위쪽 이름표는 중복이다.
+        show_header = self._shows_names() and value_kind != "name"
+        if show_header:
             painter.setPen(QPen(self._c_text_faint))
             painter.setFont(self._font(7 * scale, 600))
             painter.drawText(QRectF(cell.x() + 5 * scale, cell.y() + 3 * scale,
@@ -2208,20 +2402,18 @@ class PartyPanel(QWidget):
         else:
             value_y = cell.y() + 8 * scale
 
-        painter.setPen(QPen(accent))
-        if is_ready:
-            painter.setFont(self._font(11 * scale, 800))
-            value_text = "RDY"
+        painter.setPen(QPen(value_colour))
+        if value_kind == "number":
+            painter.setFont(self._font(13 * scale, 800, mono=True))
+        elif value_kind == "name":
+            painter.setFont(self._font(8.5 * scale, 800))
+            value_y = cell.y() + (cell.height() - 26 * scale) / 2.0
         else:
-            raw = s_widgets["status_text_lbl"].text()
-            if raw.endswith("s"):
-                painter.setFont(self._font(13 * scale, 800, mono=True))
-                value_text = raw[:-1]
-            else:
-                painter.setFont(self._font(8 * scale, 700))
-                value_text = "CD"
-        painter.drawText(QRectF(cell.x(), value_y, cell.width(), 20 * scale),
-                         Qt.AlignmentFlag.AlignCenter, value_text)
+            painter.setFont(self._font(11 * scale if is_ready else 8 * scale, 800))
+        value_rect = QRectF(cell.x() + 2 * scale, value_y,
+                            max(10.0, cell.width() - 4 * scale), 20 * scale)
+        painter.drawText(value_rect, Qt.AlignmentFlag.AlignCenter,
+                         self._elide(painter, value_text, value_rect.width()))
 
         track_h = max(2.0, 2 * scale)
         track = QRectF(cell.x() + 4 * scale, cell.bottom() - 6 * scale,
@@ -3248,15 +3440,6 @@ class SettingsModal(QDialog):
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(10)
 
-        guide = QLabel(
-            "보스 체력바 아래 <b>디버프 칸 줄</b>만 감지 영역으로 잡아 주세요. "
-            "칸은 디버프가 늘거나 줄 때 좌우로 움직이므로, 한 칸이 아니라 줄 전체를 넉넉히 지정합니다. "
-            "우측 하단 배틀 아이템 칸의 같은 아이콘을 잡지 않으려면 이 영역 밖으로 두는 것이 중요합니다."
-        )
-        guide.setWordWrap(True)
-        guide.setStyleSheet("color: #a9cfff; font-size: 11px;")
-        lay.addWidget(guide)
-
         self.boss_enable_check = QCheckBox("암흑 수류탄 디버프 감지 사용")
         self.boss_enable_check.toggled.connect(self.on_boss_controls_changed)
         lay.addWidget(self.boss_enable_check)
@@ -3305,7 +3488,7 @@ class SettingsModal(QDialog):
         preview_lay = QVBoxLayout(preview_frame)
         preview_lay.setContentsMargins(6, 6, 6, 6)
         preview_lay.setSpacing(4)
-        preview_title = QLabel("감지 영역 미리보기 (초록=감지됨, 파랑=후보, 노랑=남은시간 숫자 영역)")
+        preview_title = QLabel("미리보기 · 초록=감지, 파랑=후보, 노랑=숫자 영역")
         preview_title.setStyleSheet("font-size: 10px; color: #aaaaaa;")
         preview_lay.addWidget(preview_title)
         self.boss_preview_label = QLabel("대기 중")
@@ -3328,14 +3511,6 @@ class SettingsModal(QDialog):
         sample_lay = QVBoxLayout(sample_box)
         sample_lay.setContentsMargins(10, 8, 10, 8)
         sample_lay.setSpacing(6)
-        sample_guide = QLabel(
-            "남은 초 숫자는 8px 정도로 매우 작아 표본 없이는 값을 표시하지 않습니다. "
-            "샘플 수집을 켜고 암흑 수류탄을 한 번 쓰면, 2자리→1자리로 바뀌는 순간(=9초)을 기준으로 "
-            "이전 프레임까지 소급 라벨링되어 0~9 숫자 표본이 한 번에 모입니다."
-        )
-        sample_guide.setWordWrap(True)
-        sample_guide.setStyleSheet("color: #a9cfff; font-size: 11px;")
-        sample_lay.addWidget(sample_guide)
         sample_row = QHBoxLayout()
         self.boss_collect_check = QCheckBox("숫자 샘플 수집")
         self.boss_collect_check.toggled.connect(self.on_boss_controls_changed)
@@ -3393,12 +3568,13 @@ class SettingsModal(QDialog):
         detector = self.parent_window.boss_debuff_detector
         digits = detector.profile.digit_coverage
         if detector.profile.trusted:
-            self.boss_train_status.setText(f"숫자 인식 사용 가능 · 학습된 숫자 {digits}")
+            accuracy = float(detector.profile.accuracy or 0.0)
+            suffix = f" · 정확도 {accuracy:.2f}" if accuracy > 0.0 else ""
+            self.boss_train_status.setText(f"숫자 인식 사용 중{suffix}")
         else:
             missing = [d for d in range(10) if d not in digits]
             self.boss_train_status.setText(
-                f"숫자 표본 부족 (학습됨 {digits} / 없음 {missing}) · 지금은 지속시간 기반 추정만 사용합니다."
-            )
+                f"숫자 표본 부족 (없음 {missing}) · 지속시간 기반 추정만 사용")
 
     def on_boss_controls_changed(self, *_args):
         config = self._boss_config()
@@ -3419,7 +3595,7 @@ class SettingsModal(QDialog):
         region = self.parent_window.auto_estimate_boss_debuff_region()
         self.refresh_boss_debuff_ui()
         self.boss_status_label.setText(
-            f"기본 위치로 추정했습니다: {region}. 인게임 화면과 맞지 않으면 '영역 지정'으로 직접 잡아 주세요."
+            f"기본 위치로 추정: {region} · 맞지 않으면 '영역 지정'으로 직접 잡아 주세요."
         )
 
     def open_boss_sample_folder(self):
@@ -3443,12 +3619,12 @@ class SettingsModal(QDialog):
             return
         detector.reload_assets()
         self.refresh_boss_debuff_ui()
-        summary = (
-            f"이미지 {result['used_images']}장 사용 · 글리프 {result['added_glyphs']}개 추가 · "
-            f"학습된 숫자 {result['digits']}"
-        )
+        summary = (f"학습 완료 · 이미지 {result['used_images']}장 · "
+                   f"정확도 {result.get('accuracy', 0):.2f}")
         if not result["trusted"]:
-            summary += f" · 아직 부족한 숫자 {result['missing_digits']}"
+            summary = (f"학습 실패 (정확도 {result.get('accuracy', 0):.2f}) · "
+                       f"부족한 숫자 {result['missing_digits']} · "
+                       "샘플 폴더를 비우고 다시 수집해 주세요.")
         self.boss_train_status.setText(summary)
 
     def on_boss_debuff_state(self, state):
@@ -3462,8 +3638,7 @@ class SettingsModal(QDialog):
             }.get(state.get("source", ""), state.get("source", ""))
             value = "?" if remaining is None else f"{math.ceil(float(remaining))}초"
             self.boss_status_label.setText(
-                f"감지됨 · 남은 시간 {value} ({source}) · 일치율 {state.get('score', 0):.2f} · "
-                f"학습된 지속시간 {state.get('learned_duration', 0)}초"
+                f"감지됨 · 남은 {value} ({source}) · 일치율 {state.get('score', 0):.2f}"
             )
         else:
             self.boss_status_label.setText(
@@ -5098,14 +5273,14 @@ class MagnifierWindow(QMainWindow):
         if self.client_running and self.client:
             slot = self.detector.slots.get(name)
             if slot:
-                duration = self.detector.get_remaining_seconds(name) if not is_ready else 0
+                duration = 0 if is_ready else sync_remaining_seconds(self.detector, name)
                 self.client.send_update(name, is_ready, duration)
 
     def broadcast_skill_states(self):
         # Periodically send all registered skill states to keep party server alive and sync initial states
         if self.client_running and self.client:
             for name, slot in self.detector.slots.items():
-                duration = self.detector.get_remaining_seconds(name) if not slot.is_ready else 0
+                duration = 0 if slot.is_ready else sync_remaining_seconds(self.detector, name)
                 self.client.send_update(name, slot.is_ready, duration)
         self.broadcast_boss_debuff(force=True)
 

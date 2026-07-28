@@ -10,9 +10,15 @@ Why this is not just another cooldown slot
   the match threshold is high enough to reject the hotkey-bar rendering
   (measured 0.52~0.61 there against 1.00 on the real debuff cell).
 * The remaining-time text under the cell is only ~8 px tall at 1080p, far
-  smaller than the skill cooldown digits, so glyph classification alone is not
-  trusted.  Seconds are resolved by the first source that is actually reliable:
+  smaller than the skill cooldown digits.  It is magnified 4x and segmented on
+  the warm (R-B) channel, which separates the salmon text from any background
+  the arena shows; the digits are then matched against a trained glyph set.
+  Seconds are resolved by the first source that is actually reliable:
   trained OCR -> the 2-digit/1-digit transition anchor -> learned duration.
+* Training samples are labelled backwards from the moment the debuff
+  *disappears*, never from the live estimate.  Labelling from the estimate is
+  self-referential: one wrong guess is written to disk, trained on, and then
+  confirms itself forever (the "always 8 seconds" failure).
 """
 
 from __future__ import annotations
@@ -44,17 +50,21 @@ except Exception:  # pragma: no cover - only hit on a broken install
         return None
 
 
-PROFILE_VERSION = 1
+PROFILE_VERSION = 2  # v2: 4x upscaled warm-channel glyphs (v1 shapes are incompatible)
 DEFAULT_DEBUFF_ID = "dark_grenade"
 DEBUFF_DISPLAY_NAMES = {DEFAULT_DEBUFF_ID: "암흑 수류탄"}
 
 GLYPH_SIZE = (12, 16)  # width, height of the normalized glyph canvas
 
-# Timer text is drawn in a warm salmon tone (RGB 216,139,111 at 1080p) with a
-# dark outline.  A white top-hat keeps those thin strokes and suppresses large
-# bright areas of the game world behind the strip.
-TIMER_TOPHAT_KERNEL = (7, 7)
-TIMER_THRESHOLDS = (40, 55, 70, 30)
+# Timer text is drawn in a warm salmon tone (RGB 216,139,111 at 1080p) over an
+# arbitrary game background.  R-B separates it from the (mostly blue/grey)
+# world far better than luminance does: the text scores ~+105 while blue water
+# scores 0 after clipping.  A top-hat on that channel then removes any large
+# warm area (fire, blood, UI tint) and keeps only thin strokes.
+TIMER_TOPHAT_KERNEL = (7, 7)     # in *source* pixels, scaled by TIMER_UPSCALE
+TIMER_UPSCALE = 4                # 8px tall text is segmented far more stably at 32px
+TIMER_MIN_PEAK = 12              # below this the ROI holds no timer text at all
+TIMER_SCORE_FRACTION = 0.42      # binarize at this fraction of the strongest stroke
 
 # Cell geometry measured on the reference 1080p capture:
 #   cell 26x26 at (930,155);  text "9초" at x 936..950, y 185..192
@@ -75,10 +85,25 @@ DEACTIVATE_FRAMES = 3      # consecutive misses required before clearing
 GLYPH_COUNT_FRAMES = 2     # debounce for the digit-count anchor
 TICK_DIFF_RATIO = 0.14     # normalized pixel change that counts as a 1s tick
 
+# The 2-digit -> 1-digit anchor is only trustworthy if the two-digit state was
+# actually held for a while.  A single flickering frame must never re-pin the
+# countdown to 9s: that was the cause of the "always 8 seconds" readout.
+ANCHOR_MIN_TWO_DIGIT_SEC = 0.8
+OCR_AGREE_TOLERANCE = 1.2  # seconds two consecutive reads may disagree by
+OCR_CONFIRM_WINDOW = 2.5   # a pending first read expires after this long
+OCR_GRACE_SEC = 0.7        # hold "ON" this long before falling back to an estimate
+REFRESH_JUMP_SEC = 2.5     # a confirmed reading this far above the estimate = re-applied
+MAX_LEARNED_DURATION = 60.0  # sanity cap for an auto-learned total
+
 MAX_NEAREST_DISTANCE = 3.2
 MIN_MARGIN = 0.10
 MIN_OCR_CONFIDENCE = 0.70
+MIN_SUFFIX_SIMILARITY = 0.45   # '초' 글리프 모양 확인 하한
 MIN_TRAINED_DIGITS = 8     # digits 0-9 coverage required before OCR is trusted
+MIN_TRAINED_ACCURACY = 0.90  # leave-one-out accuracy required before OCR is trusted
+
+SAMPLE_MIN_INTERVAL = 0.4  # two crops per displayed second is plenty
+SAMPLE_BUFFER_FRAMES = 240  # ~96s of a single cast at the interval above
 
 
 def assets_root() -> Path:
@@ -142,32 +167,109 @@ def digit_roi_from_cell(cell_x: int, cell_y: int, cell_w: int, cell_h: int) -> t
 
 
 def timer_tophat(image_bgr: np.ndarray) -> np.ndarray:
+    """Legacy grayscale top-hat, kept for callers that want a luminance view."""
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) if image_bgr.ndim == 3 else image_bgr
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, TIMER_TOPHAT_KERNEL)
     return cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, kernel)
 
 
-def binarize_timer_text(image_bgr: np.ndarray, threshold: Optional[int] = None) -> tuple[np.ndarray, int]:
-    """Return (binary, used_threshold).
+def upscale_roi(image_bgr: np.ndarray, upscale: int = TIMER_UPSCALE) -> np.ndarray:
+    """8px 텍스트를 세그먼테이션이 안정적인 크기로 키운다."""
+    upscale = max(1, int(upscale))
+    if upscale == 1:
+        return image_bgr
+    return cv2.resize(image_bgr, None, fx=upscale, fy=upscale,
+                      interpolation=cv2.INTER_CUBIC)
 
-    Without an explicit threshold the sweep stops at the first value that
-    segments into a suffix plus 1-3 digits, which is what a valid ``N초`` looks
-    like.  Otherwise the middle threshold is returned so callers can still
-    inspect a best-effort binary image.
+
+def _tophat_kernel(upscale: int) -> np.ndarray:
+    return cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (max(3, TIMER_TOPHAT_KERNEL[0] * upscale), max(3, TIMER_TOPHAT_KERNEL[1] * upscale)))
+
+
+def text_chroma(color_bgr: Iterable[int]) -> tuple[float, float]:
+    """BGR 색의 Lab 색상 좌표(a*, b*). 밝기는 버린다."""
+    patch = np.zeros((1, 1, 3), np.uint8)
+    patch[0, 0] = [int(v) for v in color_bgr]
+    lab = cv2.cvtColor(patch, cv2.COLOR_BGR2LAB)[0, 0]
+    return float(lab[1]), float(lab[2])
+
+
+DEFAULT_TEXT_BGR = (111, 139, 216)     # 1080p 실측 살몬색 (RGB 216,139,111)
+DEFAULT_TEXT_CHROMA = text_chroma(DEFAULT_TEXT_BGR)
+
+# 서로 다른 배경에서 각각 강한 채널들. 한 채널로는 모든 보스방을 덮을 수 없다.
+#   warm   : R-B. 파랑/회색 배경에서 압도적으로 강하다.
+#   chroma : 글자 색조와의 거리. 배경이 따뜻하지만 색조가 다를 때 유효하다.
+#   bright : 밝기 top-hat. 배경이 글자와 같은 색조일 때 어두운 외곽선 덕에 남는다.
+#   dark   : 밝기 bottom-hat. 배경이 글자보다 밝을 때(설원·백색 아레나) 유효하다.
+TIMER_SCORE_MODES = ("warm", "chroma", "bright", "dark")
+# 검증된 기본 분리 지점(0.42)을 먼저 쓰고, 실패할 때만 더 관대한/엄격한 값을 본다.
+TIMER_SCORE_FRACTIONS = (0.42, 0.33, 0.55)
+
+
+def timer_score(big_bgr: np.ndarray, mode: str,
+                chroma: tuple[float, float] = None,
+                upscale: int = TIMER_UPSCALE) -> np.ndarray:
+    """업스케일된 ROI에서 글자 획만 남기는 점수 이미지."""
+    kernel = _tophat_kernel(upscale)
+    if big_bgr.ndim == 2:
+        gray = big_bgr
+    else:
+        gray = cv2.cvtColor(big_bgr, cv2.COLOR_BGR2GRAY)
+
+    if mode == "warm":
+        if big_bgr.ndim == 2:
+            base = gray
+        else:
+            channels = big_bgr.astype(np.int16)
+            base = np.clip(channels[:, :, 2] - channels[:, :, 0], 0, 255).astype(np.uint8)
+        return cv2.morphologyEx(base, cv2.MORPH_TOPHAT, kernel)
+    if mode == "chroma":
+        if big_bgr.ndim == 2:
+            return np.zeros_like(gray)
+        target = chroma or DEFAULT_TEXT_CHROMA
+        lab = cv2.cvtColor(big_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        distance = np.hypot(lab[:, :, 1] - target[0], lab[:, :, 2] - target[1])
+        closeness = np.clip(255.0 - distance * 3.0, 0, 255).astype(np.uint8)
+        return cv2.morphologyEx(closeness, cv2.MORPH_TOPHAT, kernel)
+    if mode == "bright":
+        return cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, kernel)
+    if mode == "dark":
+        return cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
+    raise ValueError(f"unknown timer score mode: {mode}")
+
+
+def timer_text_score(image_bgr: np.ndarray,
+                     upscale: int = TIMER_UPSCALE) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(upscaled_bgr, score)`` for the default (warm) channel."""
+    big = upscale_roi(image_bgr, upscale)
+    return big, timer_score(big, "warm", upscale=upscale)
+
+
+def binarize_timer_text(image_bgr: np.ndarray, threshold: Optional[int] = None,
+                        upscale: int = TIMER_UPSCALE, mode: str = "warm",
+                        chroma: tuple[float, float] = None) -> tuple[np.ndarray, int]:
+    """Return ``(binary, used_threshold)`` for one hypothesis of the timer ROI.
+
+    A single deterministic threshold is derived from the strongest stroke in the
+    ROI instead of sweeping fixed values.  The old sweep picked a different
+    threshold nearly every frame, so the same ``17초`` segmented as 1, 2 or 3
+    glyphs from one frame to the next.
     """
-    tophat = timer_tophat(image_bgr)
-    if threshold is not None:
-        return (tophat >= threshold).astype(np.uint8) * 255, int(threshold)
-
-    fallback = None
-    for value in TIMER_THRESHOLDS:
-        binary = (tophat >= value).astype(np.uint8) * 255
-        suffix_box, digit_boxes = segment_timer_glyphs(binary)
-        if suffix_box is not None and 1 <= len(digit_boxes) <= 3:
-            return binary, value
-        if fallback is None:
-            fallback = (binary, value)
-    return fallback if fallback else ((tophat >= 55).astype(np.uint8) * 255, 55)
+    big = upscale_roi(image_bgr, upscale)
+    score = timer_score(big, mode, chroma, upscale)
+    peak = int(score.max()) if score.size else 0
+    if threshold is None:
+        if peak < TIMER_MIN_PEAK:
+            return np.zeros(score.shape, np.uint8), 0
+        threshold = max(10, int(round(peak * TIMER_SCORE_FRACTION)))
+    binary = (score >= int(threshold)).astype(np.uint8) * 255
+    if upscale > 1:
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE,
+                                  cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
+    return binary, int(threshold)
 
 
 def _components(binary: np.ndarray, min_area: int = 3) -> list[tuple[int, int, int, int, int]]:
@@ -179,56 +281,106 @@ def _components(binary: np.ndarray, min_area: int = 3) -> list[tuple[int, int, i
     return result
 
 
+def _merge_split_boxes(boxes: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
+    """Join boxes that are two halves of one glyph.
+
+    Only boxes whose x ranges genuinely overlap are merged (a ``9`` can break
+    into bowl + tail).  Merging by proximity instead would glue the ``1`` and
+    the ``7`` of ``17초`` into a single box.
+    """
+    merged: list[tuple[int, int, int, int]] = []
+    for box in sorted(boxes, key=lambda b: b[0]):
+        for index, previous in enumerate(merged):
+            overlap = (min(previous[0] + previous[2], box[0] + box[2])
+                       - max(previous[0], box[0]))
+            if overlap >= 0.45 * min(previous[2], box[2]):
+                x0 = min(previous[0], box[0])
+                y0 = min(previous[1], box[1])
+                x1 = max(previous[0] + previous[2], box[0] + box[2])
+                y1 = max(previous[1] + previous[3], box[1] + box[3])
+                merged[index] = (x0, y0, x1 - x0, y1 - y0)
+                break
+        else:
+            merged.append(tuple(int(v) for v in box))
+    merged.sort(key=lambda b: b[0])
+    return merged
+
+
 def segment_timer_glyphs(binary: np.ndarray) -> tuple[Optional[tuple[int, int, int, int]], list[tuple[int, int, int, int]]]:
     """Locate the ``초`` suffix and the digits to its left.
 
-    The suffix is the widest text-height component nearest the horizontal
-    centre of the ROI: the ROI is centred on the debuff cell, so a neighbouring
-    cell's text can only ever appear at the far left/right edge.
+    Every rule is expressed as a fraction of the ROI height, so the same code
+    works on a raw 16px ROI and on the 4x upscaled binary.  The suffix is the
+    widest text-height component nearest the horizontal centre: the ROI is
+    centred on the debuff cell, so a neighbouring cell's text can only ever
+    appear at the far left/right edge.
     """
     height, width = binary.shape[:2]
-    comps = _components(binary)
+    comps = _components(binary, min_area=3 if height <= 24 else 6)
     if not comps:
         return None, []
 
-    text_h = max(4, int(round(height * 0.45)))
+    boxes = _merge_split_boxes([(c[0], c[1], c[2], c[3]) for c in comps])
+    text_h = max(4.0, height * 0.38)
+    tall = [b for b in boxes if b[3] >= text_h]
+    if not tall:
+        return None, []
+
     centre = width / 2.0
-    # ``초`` is wider than any digit at this scale (10px vs 5-6px at 1080p).
+    # ``초`` is wider than any digit at this scale (10px vs 3-6px at 1080p).
     suffix_candidates = [
-        c for c in comps
-        if c[3] >= text_h * 0.55 and c[2] >= 6 and c[0] > centre - width * 0.30
-        and c[0] > 0 and (c[0] + c[2]) < width
+        b for b in tall
+        if b[2] >= height * 0.40 and b[0] > centre - width * 0.32
+        and b[0] > 0 and (b[0] + b[2]) < width
     ]
     if not suffix_candidates:
         return None, []
-    suffix = max(suffix_candidates, key=lambda c: (c[2] * c[3], -abs(c[0] - centre)))
-    sx, sy, sw, sh, _ = suffix
+    suffix = max(suffix_candidates, key=lambda b: (b[2] * b[3], -abs(b[0] - centre)))
+    sx, sy, sw, sh, = suffix
     suffix_box = (sx, sy, sw, sh)
 
-    digits = []
-    for x, y, w, h, _area in comps:
-        if x + w > sx + 1:
-            continue
-        if x <= 0:  # clipped by the ROI edge -> belongs to the neighbour cell
-            continue
-        if h < text_h * 0.55 or h > height:
-            continue
-        if w > max(8, int(width * 0.30)):
-            continue
-        digits.append((x, y, w, h))
+    slack = max(1, int(round(height * 0.05)))
+    digits = [b for b in tall
+              if b[0] + b[2] <= sx + slack        # left of the suffix
+              and b[0] > 0                        # not clipped -> not a neighbour
+              and b[2] <= max(4, int(round(height * 0.45)))]
     digits.sort(key=lambda b: b[0])
-    # Keep only the run that is adjacent to the suffix; anything separated by a
-    # gap wider than one glyph belongs to the neighbouring debuff cell.
+    # Keep only the run adjacent to the suffix.  One glyph advance is ~0.85 of
+    # the text height, a neighbouring cell sits a whole cell width away.
     if digits:
+        gap_limit = max(2, int(round(sh * 0.85)))
         kept = [digits[-1]]
         for box in reversed(digits[:-1]):
             previous = kept[0]
-            if previous[0] - (box[0] + box[2]) <= max(3, int(round(previous[2] * 0.9))):
+            if previous[0] - (box[0] + box[2]) <= gap_limit:
                 kept.insert(0, box)
             else:
                 break
         digits = kept[-3:]
-    return suffix_box, digits
+    return suffix_box, [tuple(int(v) for v in b) for b in digits]
+
+
+def has_decimal_point(binary: np.ndarray, suffix_box, digit_boxes) -> bool:
+    """True when the timer shows a sub-second value such as ``0.4초``.
+
+    Below one second the game switches to one decimal place.  The dot is too
+    short to pass the digit height filter, so ``0.4초`` would otherwise be read
+    as the two-digit number 04 and re-trigger the 2->1 digit anchor.
+    """
+    if suffix_box is None or len(digit_boxes) < 2:
+        return False
+    height = binary.shape[0]
+    left = min(b[0] for b in digit_boxes)
+    right = suffix_box[0]
+    baseline = min(b[1] + b[3] for b in digit_boxes)
+    for x, y, w, h, _area in _components(binary, min_area=1):
+        if h >= height * 0.38 or w > height * 0.30:
+            continue
+        if x <= left or x + w > right:
+            continue
+        if y + h >= baseline - height * 0.12:
+            return True
+    return False
 
 
 def normalize_glyph(binary: np.ndarray, box: Iterable[int]) -> np.ndarray:
@@ -241,7 +393,11 @@ def normalize_glyph(binary: np.ndarray, box: Iterable[int]) -> np.ndarray:
     scale = min(max_w / max(1, crop.shape[1]), max_h / max(1, crop.shape[0]))
     nw = max(1, int(round(crop.shape[1] * scale)))
     nh = max(1, int(round(crop.shape[0] * scale)))
-    resized = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_NEAREST)
+    # Averaging on the way down keeps a 32px stroke recognizable; nearest
+    # neighbour would alias it into a different shape every frame.
+    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_NEAREST
+    resized = cv2.resize(crop, (nw, nh), interpolation=interpolation)
+    resized = (resized >= 110).astype(np.uint8) * 255
     ox = (GLYPH_SIZE[0] - nw) // 2
     oy = (GLYPH_SIZE[1] - nh) // 2
     canvas[oy:oy + nh, ox:ox + nw] = resized
@@ -271,9 +427,12 @@ class TimerGlyphProfile:
     labels: list[int] = field(default_factory=list)
     glyphs: list[str] = field(default_factory=list)
     suffix_glyphs: list[str] = field(default_factory=list)
+    accuracy: float = 0.0
     source: str = "bootstrap"
     _features: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
     _labels_np: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
+    _suffix_features: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
+    _loo: Optional[float] = field(default=None, repr=False, compare=False)
 
     # -- persistence --------------------------------------------------------
     def to_dict(self) -> dict:
@@ -284,6 +443,7 @@ class TimerGlyphProfile:
             "labels": self.labels,
             "glyphs": self.glyphs,
             "suffix_glyphs": self.suffix_glyphs,
+            "accuracy": round(float(self.accuracy), 4),
             "source": self.source,
         }
 
@@ -296,6 +456,7 @@ class TimerGlyphProfile:
             labels=[int(v) for v in data.get("labels", [])],
             glyphs=[str(v) for v in data.get("glyphs", [])],
             suffix_glyphs=[str(v) for v in data.get("suffix_glyphs", [])],
+            accuracy=float(data.get("accuracy", 0.0) or 0.0),
             source=str(data.get("source", "bootstrap")),
         )
 
@@ -310,13 +471,24 @@ class TimerGlyphProfile:
 
     @classmethod
     def load_for(cls, debuff_id: str = DEFAULT_DEBUFF_ID) -> "TimerGlyphProfile":
-        """User-trained profile first, bundled seed second, empty last."""
+        """Pick the best usable profile: user-trained first, bundled seed next.
+
+        A user profile that cannot separate its own digits (trained from a bad
+        sample round) must not shadow the verified bundled seed, so an untrusted
+        user profile loses to a trusted bundled one.  Profiles from an older
+        ``PROFILE_VERSION`` are ignored: their glyphs were produced by a
+        different binarization and no longer describe the same shapes.
+        """
+        candidates = []
         for path in (user_data_root() / "timer_profiles" / f"{debuff_id}.json",
                      assets_root() / "timer_profiles" / f"{debuff_id}.json"):
             profile = cls.load(path)
             if profile is not None and profile.version == PROFILE_VERSION:
+                candidates.append(profile)
+        for profile in candidates:
+            if profile.trusted:
                 return profile
-        return cls(profile_id=debuff_id)
+        return candidates[0] if candidates else cls(profile_id=debuff_id)
 
     def save(self, path: Path) -> Path:
         path = Path(path)
@@ -334,6 +506,7 @@ class TimerGlyphProfile:
         self.labels.append(int(digit))
         self.glyphs.append(encoded)
         self._features = None
+        self._loo = None
         return True
 
     def add_suffix(self, glyph: np.ndarray) -> bool:
@@ -341,6 +514,7 @@ class TimerGlyphProfile:
         if not encoded or encoded in self.suffix_glyphs:
             return False
         self.suffix_glyphs.append(encoded)
+        self._suffix_features = None
         return True
 
     # -- inference ----------------------------------------------------------
@@ -350,7 +524,41 @@ class TimerGlyphProfile:
 
     @property
     def trusted(self) -> bool:
-        return len(self.digit_coverage) >= MIN_TRAINED_DIGITS
+        """OCR is only used once the glyph set is both complete and verified.
+
+        A profile trained from mislabelled samples covers every digit yet cannot
+        tell them apart, and used to be trusted on coverage alone.  The stored
+        (or lazily measured) leave-one-out score now has to agree.
+        """
+        if len(self.digit_coverage) < MIN_TRAINED_DIGITS:
+            return False
+        score = float(self.accuracy or 0.0)
+        if score <= 0.0:
+            if self._loo is None:
+                self._loo = self.self_accuracy()
+            score = self._loo
+        return score >= MIN_TRAINED_ACCURACY
+
+    def self_accuracy(self) -> float:
+        """Leave-one-out accuracy over the stored glyphs.
+
+        Only glyphs whose digit has at least one sibling can be scored: with a
+        single sample per class the nearest *other* glyph is always a different
+        digit, which would report 0% for a perfectly usable seed profile.
+        """
+        if not self._ensure_features():
+            return 1.0
+        features, labels = self._features, self._labels_np
+        counts = {int(v): int((labels == v).sum()) for v in np.unique(labels)}
+        scorable = [i for i in range(features.shape[0]) if counts[int(labels[i])] >= 2]
+        if len(scorable) < 4:
+            return 1.0
+        correct = 0
+        for index in scorable:
+            distances = np.linalg.norm(features - features[index], axis=1)
+            distances[index] = np.inf
+            correct += int(labels[int(np.argmin(distances))] == labels[index])
+        return correct / float(len(scorable))
 
     def _ensure_features(self) -> bool:
         if self._features is not None:
@@ -385,6 +593,28 @@ class TimerGlyphProfile:
             confidence *= 0.55
         return digit, float(min(1.0, confidence))
 
+    def suffix_similarity(self, glyph: np.ndarray) -> float:
+        """학습된 '초' 글리프와의 유사도(0~1).
+
+        숫자 하나를 함께 삼킨 덩어리를 '초' 로 착각하면 '19초' 가 '1초' 로
+        읽힌다. 접미사 모양 자체를 확인해 그 후보를 버린다.
+        """
+        if not self.suffix_glyphs:
+            return 1.0
+        if self._suffix_features is None:
+            features = []
+            for encoded in self.suffix_glyphs:
+                decoded = decode_png(encoded)
+                if decoded is not None and decoded.shape[:2] == (GLYPH_SIZE[1], GLYPH_SIZE[0]):
+                    features.append(glyph_features(decoded))
+            self._suffix_features = (np.asarray(features, np.float32) if features
+                                     else np.zeros((0, 1), np.float32))
+        if self._suffix_features.size == 0:
+            return 1.0
+        distances = np.linalg.norm(self._suffix_features - glyph_features(glyph), axis=1)
+        nearest = float(np.min(distances))
+        return max(0.0, 1.0 - nearest / MAX_NEAREST_DISTANCE)
+
     def read_seconds(self, binary: np.ndarray,
                      digit_boxes: list[tuple[int, int, int, int]]) -> tuple[Optional[int], float]:
         if not digit_boxes or not self.trusted:
@@ -400,6 +630,195 @@ class TimerGlyphProfile:
         if confidence < MIN_OCR_CONFIDENCE:
             return None, confidence
         return int("".join(str(v) for v in values)), confidence
+
+
+# ---------------------------------------------------------------------------
+# Multi-hypothesis reading
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TimerReading:
+    """One frame's timer readout with everything the tracker needs."""
+    value: Optional[int] = None
+    confidence: float = 0.0
+    glyph_count: int = 0
+    signature: Optional[np.ndarray] = None
+    sub_second: bool = False
+    mode: str = ""
+    threshold: int = 0
+    binary: Optional[np.ndarray] = field(default=None, repr=False)
+    digit_boxes: list = field(default_factory=list, repr=False)
+    suffix_box: Optional[tuple] = None
+    candidates: int = 0
+
+
+def glyph_layout_ok(binary: np.ndarray, suffix_box, digit_boxes) -> bool:
+    """Does this segmentation actually look like ``N초``?
+
+    The glyph classifier always returns *some* nearest neighbour, so its
+    confidence alone cannot tell a real digit from a lump of background.  These
+    geometric rules can: the game renders the digits and the suffix on one
+    baseline, at one size, with sparse strokes.
+    """
+    if suffix_box is None or not digit_boxes:
+        return False
+    height, width = binary.shape[:2]
+    ink = float(np.count_nonzero(binary)) / float(height * width)
+    if ink > 0.32:                      # 배경이 덩어리째 켜진 후보
+        return False
+    sx, sy, sw, sh = suffix_box
+    if sh <= 0 or sw <= 0:
+        return False
+    if sw > 1.35 * sh:
+        # '초' 는 거의 정사각형이다. 이보다 넓으면 옆 숫자를 함께 삼킨 덩어리다.
+        # 그 상태로 읽으면 '19초' 가 '1초' 로 읽힌다.
+        return False
+    widths = [b[2] for b in digit_boxes]
+    if sw < 1.15 * float(np.median(widths)):
+        return False                    # 초 글리프는 숫자보다 넓다
+    suffix_baseline = sy + sh
+    for x, y, w, h in digit_boxes:
+        if not (0.70 * sh <= h <= 1.30 * sh):
+            return False                # 글자 높이가 한 줄로 맞지 않는다
+        if abs((y + h) - suffix_baseline) > 0.28 * sh:
+            return False                # 베이스라인이 어긋난다
+        crop = binary[max(0, y):y + h, max(0, x):x + w]
+        if crop.size == 0:
+            return False
+        fill = float(np.count_nonzero(crop)) / float(crop.size)
+        if not (0.18 <= fill <= 0.90):
+            return False                # 획 밀도가 숫자답지 않다
+
+    # 잘려나간 자리 검사. '18초' 에서 8을 놓치면 마지막 숫자와 초 사이가
+    # 한 글자만큼 벌어지고, 1을 놓치면 첫 숫자 왼쪽에 글자 잉크가 남는다.
+    # 이런 후보는 18을 1로 읽는 위험한 오독이 되므로 버린다.
+    rightmost = max(b[0] + b[2] for b in digit_boxes)
+    if sx - rightmost > 0.55 * sh:
+        return False
+    leftmost = min(b[0] for b in digit_boxes)
+    band_left = max(0, int(leftmost - 0.9 * sh))
+    if leftmost - band_left >= 4:
+        band = binary[max(0, sy):suffix_baseline, band_left:leftmost]
+        if band.size and float(np.count_nonzero(band)) / float(band.size) > 0.10:
+            return False
+    return True
+
+
+def timer_hypotheses(roi_bgr: np.ndarray, chroma: tuple[float, float] = None,
+                     upscale: int = TIMER_UPSCALE):
+    """Yield every plausible ``(binary, suffix, digits, mode, threshold)``.
+
+    A frame is separated once per colour channel and threshold; only the
+    combinations that look like ``N초`` are handed back.
+    """
+    if roi_bgr is None or roi_bgr.size == 0:
+        return
+    big = upscale_roi(roi_bgr, upscale)
+    for priority, mode in enumerate(TIMER_SCORE_MODES):
+        score_image = timer_score(big, mode, chroma, upscale)
+        peak = int(score_image.max()) if score_image.size else 0
+        if peak < TIMER_MIN_PEAK:
+            continue
+        for fraction in TIMER_SCORE_FRACTIONS:
+            threshold = max(10, int(round(peak * fraction)))
+            binary = (score_image >= threshold).astype(np.uint8) * 255
+            if upscale > 1:
+                binary = cv2.morphologyEx(
+                    binary, cv2.MORPH_CLOSE,
+                    cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
+            suffix_box, digit_boxes = segment_timer_glyphs(binary)
+            if not glyph_layout_ok(binary, suffix_box, digit_boxes):
+                continue
+            yield binary, suffix_box, digit_boxes, mode, threshold, priority
+
+
+def read_timer_value(roi_bgr: np.ndarray, profile: "TimerGlyphProfile",
+                     predicted: Optional[float] = None,
+                     chroma: tuple[float, float] = None,
+                     upscale: int = TIMER_UPSCALE) -> TimerReading:
+    """Read ``N초`` from the timer ROI, trying several separations.
+
+    No single colour channel survives every boss arena.  The warm (R-B) channel
+    is unbeatable over the blue/grey arenas it was tuned on, but a *warm* arena
+    (lava, sand, sunset) scores higher than the text itself and the readout dies
+    - which is exactly the "works on this boss, not on that one" report.  The
+    luminance top-hat still finds the glyphs there, because the game draws a dark
+    outline around them, so the stroke stays a local maximum whatever colour the
+    background is.
+
+    Candidates are ranked, not taken first-come:
+
+    1. agreement with where the countdown should already be (strongest signal),
+    2. more digits wins - dropping the leading ``1`` of ``17초`` is the common
+       failure, while inventing a digit is already blocked by the layout gate,
+    3. classifier confidence, then the channel's own reliability order.
+    """
+    best = TimerReading()
+    fallback: Optional[TimerReading] = None
+    ranked: list[tuple[tuple, TimerReading]] = []
+
+    for binary, suffix_box, digit_boxes, mode, threshold, priority in timer_hypotheses(
+            roi_bgr, chroma, upscale):
+        sub_second = has_decimal_point(binary, suffix_box, digit_boxes)
+        reading = TimerReading(
+            glyph_count=0 if sub_second else len(digit_boxes),
+            sub_second=sub_second, mode=mode, threshold=threshold,
+            binary=binary, digit_boxes=digit_boxes, suffix_box=suffix_box,
+            signature=None if sub_second else digit_signature(binary, digit_boxes),
+        )
+        if sub_second:
+            if fallback is None:
+                fallback = reading
+            continue
+        if profile.suffix_similarity(normalize_glyph(binary, suffix_box)) < MIN_SUFFIX_SIMILARITY:
+            continue                    # '초' 모양이 아니면 자리수부터 믿을 수 없다
+        seconds, confidence = profile.read_seconds(binary, digit_boxes)
+        reading.value = seconds
+        reading.confidence = confidence
+        if seconds is None or confidence < MIN_OCR_CONFIDENCE:
+            if fallback is None or confidence > fallback.confidence:
+                fallback = reading
+            continue
+        agrees = (predicted is not None
+                  and abs(float(seconds) - float(predicted)) <= 2.5)
+        ranked.append(((0 if agrees else 1, -len(digit_boxes),
+                        -round(confidence, 3), priority), reading))
+        if agrees and confidence >= 0.95:
+            reading.candidates = len(ranked)
+            return reading
+
+    if ranked:
+        ranked.sort(key=lambda item: item[0])
+        winner = ranked[0][1]
+        winner.candidates = len(ranked)
+        return winner
+    if fallback is not None:
+        return fallback
+    return best
+
+
+def sample_text_color(roi_bgr: np.ndarray, binary: np.ndarray,
+                      digit_boxes, upscale: int = TIMER_UPSCALE) -> Optional[tuple[float, float]]:
+    """Chroma of the pixels that were actually classified as digits.
+
+    Lets the detector re-calibrate the target colour per raid: UI filters, HDR
+    and arena lighting all shift the rendered salmon a little.
+    """
+    if binary is None or not digit_boxes or roi_bgr is None:
+        return None
+    big = upscale_roi(roi_bgr, upscale)
+    if big.ndim != 3 or big.shape[:2] != binary.shape[:2]:
+        return None
+    mask = np.zeros(binary.shape, np.uint8)
+    for x, y, w, h in digit_boxes:
+        mask[max(0, y):y + h, max(0, x):x + w] = binary[max(0, y):y + h, max(0, x):x + w]
+    # 획 가장자리(안티에일리어싱)를 빼고 안쪽만 본다.
+    mask = cv2.erode(mask, np.ones((2, 2), np.uint8))
+    pixels = big[mask > 0]
+    if pixels.shape[0] < 12:
+        return None
+    median = np.median(pixels.reshape(-1, 3), axis=0)
+    return text_chroma(median)
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +922,8 @@ class BossDebuffTracker:
         self.debuff_id = debuff_id
         self.configured_duration = float(configured_duration or 0.0)
         self.learned_duration = 0.0
+        self.observed_max = 0.0     # 지금까지 OCR 로 확실히 읽은 가장 큰 숫자
+        self.expect_ocr = False     # 신뢰할 수 있는 글리프 세트가 있는가
         self.reset()
 
     def reset(self) -> None:
@@ -516,10 +937,14 @@ class BossDebuffTracker:
         self.glyph_count = 0
         self._glyph_count_streak = 0
         self._pending_glyph_count = 0
+        self._glyph_count_since = 0.0
+        self._anchor_fired = False
         self._anchor_value = None
         self._anchor_at = 0.0
         self._anchor_source = ""
         self._last_signature = None
+        self._ocr_pending = None
+        self._refresh_pending = None
         self.tick_count = 0
         self.last_tick_at = 0.0
         self.last_ocr_seconds = None
@@ -535,20 +960,51 @@ class BossDebuffTracker:
         self._anchor_value = float(value)
         self._anchor_at = now
         self._anchor_source = source
+        if source == "ocr":
+            # 총 지속시간은 '여태 본 가장 큰 숫자'로 배운다.  예전에는
+            # 읽은 값 + 감지 시작 이후 경과 로 계산했는데, 디버프가 만료 전에
+            # 다시 걸리면(리프레시) 경과가 그대로 누적되어 20초 디버프가 28.8초로
+            # 굳었고, 매번 28초부터 세는 것처럼 보였다.
+            if float(value) > self.observed_max:
+                self.observed_max = float(value)
+            self.learned_duration = round(self.observed_max, 1)
+            return
         if self.appeared_at > 0.0:
-            candidate = float(value) + (now - self.appeared_at)
-            # Only widen the learned total: an early anchor sees the largest
-            # remaining value, later anchors can only under-estimate it.
+            candidate = float(value) + max(0.0, now - self.appeared_at)
+            if self.observed_max > 0.0:
+                # OCR 로 본 최대값이 있으면 그 이상으로는 늘리지 않는다.
+                candidate = min(candidate, self.observed_max)
             if candidate > self.learned_duration:
                 self.learned_duration = round(candidate, 1)
 
+    def _accepts_anchor(self, value: float, now: float) -> bool:
+        """A measured countdown may never jump back up.
+
+        ``duration`` is only an estimate, so a real measurement is allowed to
+        correct it in either direction.  Once the value came from OCR or the
+        digit-count anchor, though, a higher number means a misread.
+        """
+        current, source = self._remaining(now)
+        if current is None or source == "duration":
+            return True
+        return value <= math.ceil(current) + 1
+
     def _remaining(self, now: float) -> tuple[Optional[float], str]:
+        # 경과 시간은 음수가 될 수 없다. 시계가 뒤로 간 것처럼 보이는 상태
+        # (스레드 재시작, 서로 다른 시간축 혼입)에서 음수 경과를 그대로 빼면
+        # 남은 시간이 총 지속시간보다 커지는 엉뚱한 값이 나온다.
         if self._anchor_value is not None:
-            remaining = self._anchor_value - (now - self._anchor_at)
+            remaining = self._anchor_value - max(0.0, now - self._anchor_at)
             return max(0.0, remaining), self._anchor_source
         total = self.total_duration
         if total > 0.0 and self.appeared_at > 0.0:
-            return max(0.0, total - (now - self.appeared_at)), "duration"
+            elapsed = max(0.0, now - self.appeared_at)
+            if self.expect_ocr and elapsed < OCR_GRACE_SEC:
+                # 숫자를 읽을 수 있는 상태라면, 첫 몇 프레임은 추정값을 내보내지
+                # 않는다. 학습된 총 지속시간이 조금이라도 어긋나 있으면 캐스트
+                # 시작마다 틀린 숫자가 한 번 스쳐 지나간다.
+                return None, "unknown"
+            return max(0.0, total - elapsed), "duration"
         return None, "unknown"
 
     # -- main entry ---------------------------------------------------------
@@ -569,9 +1025,13 @@ class BossDebuffTracker:
             self._anchor_value = None
             self._anchor_at = 0.0
             self._anchor_source = ""
+            self._anchor_fired = False
             self._last_signature = None
             self._pending_glyph_count = 0
             self._glyph_count_streak = 0
+            self._glyph_count_since = 0.0
+            self._ocr_pending = None
+            self._refresh_pending = None
             self.glyph_count = 0
         elif self.active and self._miss_streak >= DEACTIVATE_FRAMES:
             self.active = False
@@ -579,6 +1039,8 @@ class BossDebuffTracker:
             self.score = frame.score
             self._anchor_value = None
             self._anchor_source = ""
+            self._ocr_pending = None
+            self._refresh_pending = None
             self.glyph_count = 0
             return self.snapshot(now)
 
@@ -592,7 +1054,9 @@ class BossDebuffTracker:
             return self.snapshot(now)
 
         # Digit-count anchor: the strip switches from two glyphs to one exactly
-        # when the remaining time goes 10s -> 9s.
+        # when the remaining time goes 10s -> 9s.  It fires at most once per
+        # cast and only after the two-digit state was actually held, because a
+        # single dropped digit used to re-pin the countdown to 9s forever.
         if frame.glyph_count > 0:
             if frame.glyph_count == self._pending_glyph_count:
                 self._glyph_count_streak += 1
@@ -601,9 +1065,17 @@ class BossDebuffTracker:
                 self._glyph_count_streak = 1
             if self._glyph_count_streak >= GLYPH_COUNT_FRAMES:
                 previous = self.glyph_count
-                self.glyph_count = frame.glyph_count
-                if previous == 2 and frame.glyph_count == 1:
-                    self.set_anchor(9.0, now, "anchor")
+                if frame.glyph_count != previous:
+                    self.glyph_count = frame.glyph_count
+                    held = now - self._glyph_count_since if self._glyph_count_since else 0.0
+                    self._glyph_count_since = now
+                    if (previous == 2 and frame.glyph_count == 1
+                            and not self._anchor_fired
+                            and self._anchor_source != "ocr"
+                            and held >= ANCHOR_MIN_TWO_DIGIT_SEC
+                            and self._accepts_anchor(9.0, now)):
+                        self._anchor_fired = True
+                        self.set_anchor(9.0, now, "anchor")
 
         # 1s tick detection keeps the displayed integer in step with the game.
         if frame.digit_signature is not None:
@@ -624,13 +1096,49 @@ class BossDebuffTracker:
         if frame.ocr_seconds is not None and frame.ocr_confidence >= MIN_OCR_CONFIDENCE:
             self.last_ocr_seconds = int(frame.ocr_seconds)
             self.last_ocr_confidence = float(frame.ocr_confidence)
-            previous, _ = self._remaining(now)
-            # OCR may only move the countdown forward (down in seconds) unless
-            # nothing is known yet; a jump upwards means a misread.
-            if previous is None or frame.ocr_seconds <= math.ceil(previous) + 1:
-                self.set_anchor(float(frame.ocr_seconds), now, "ocr")
+            self._ingest_ocr(float(frame.ocr_seconds), now)
 
         return self.snapshot(now)
+
+    def _ingest_ocr(self, value: float, now: float) -> None:
+        """Anchor on OCR, but only after two mutually consistent reads.
+
+        A single frame can be misread (background junk merging into a glyph).
+        Two reads that agree once the elapsed time is taken into account cannot
+        both be wrong in the same direction, so that pair is what pins the
+        countdown.  Afterwards each further read has to stay consistent.
+        """
+        if self._anchor_source == "ocr" and self._anchor_value is not None:
+            predicted = self._anchor_value - max(0.0, now - self._anchor_at)
+            if abs(value - predicted) <= OCR_AGREE_TOLERANCE:
+                self.set_anchor(value, now, "ocr")
+                return
+            if value > predicted + REFRESH_JUMP_SEC:
+                # 값이 크게 올라갔다 = 만료 전에 다시 걸렸다(리프레시).
+                # 확인용으로 한 프레임 더 본 뒤 새 캐스트로 처리한다.
+                pending = self._refresh_pending
+                self._refresh_pending = (value, now)
+                if pending is not None and now - pending[1] <= OCR_CONFIRM_WINDOW \
+                        and abs(value - (pending[0] - (now - pending[1]))) <= OCR_AGREE_TOLERANCE:
+                    self._refresh_pending = None
+                    self.appeared_at = now
+                    self._anchor_fired = False
+                    self.set_anchor(value, now, "ocr")
+            return
+
+        pending = self._ocr_pending
+        self._ocr_pending = (value, now)
+        if pending is None:
+            return
+        previous_value, previous_at = pending
+        if now - previous_at > OCR_CONFIRM_WINDOW:
+            return
+        predicted = previous_value - (now - previous_at)
+        if abs(value - predicted) > OCR_AGREE_TOLERANCE:
+            return
+        if not self._accepts_anchor(value, now):
+            return
+        self.set_anchor(value, now, "ocr")
 
     def snapshot(self, now: Optional[float] = None) -> dict:
         now = time.monotonic() if now is None else float(now)
@@ -693,6 +1201,7 @@ class BossDebuffDetector(QThread):
         self.templates = load_icon_templates(debuff_id)
         self.profile = TimerGlyphProfile.load_for(debuff_id)
         self.tracker = BossDebuffTracker(debuff_id)
+        self.tracker.expect_ocr = bool(self.profile.trusted)
         self.is_running = False
         self._locked_size = None
         self._last_emit = 0.0
@@ -701,6 +1210,7 @@ class BossDebuffDetector(QThread):
         self._sample_buffer: list[tuple[float, np.ndarray]] = []
         self._sample_seq = 0
         self.sample_root = user_data_root() / "samples" / debuff_id
+        self.text_chroma = DEFAULT_TEXT_CHROMA
         self.last_error = ""
 
     # -- configuration ------------------------------------------------------
@@ -721,9 +1231,11 @@ class BossDebuffDetector(QThread):
             self.tracker.configured_duration = max(0.0, float(duration))
         if learned_duration is not None:
             # Restored from config so the very first cast after a restart can
-            # already show a countdown instead of a bare "ON".
-            self.tracker.learned_duration = max(self.tracker.learned_duration,
-                                                max(0.0, float(learned_duration)))
+            # already show a countdown instead of a bare "ON".  A stored value
+            # from an older build could be inflated by a mid-cast refresh, so it
+            # is capped: no debuff in the strip runs longer than this.
+            restored = max(0.0, min(float(learned_duration), MAX_LEARNED_DURATION))
+            self.tracker.learned_duration = max(self.tracker.learned_duration, restored)
         if min_icon_px is not None:
             self.min_icon_px = max(8, int(min_icon_px))
         if max_icon_px is not None:
@@ -742,6 +1254,7 @@ class BossDebuffDetector(QThread):
     def reload_assets(self):
         self.templates = load_icon_templates(self.debuff_id)
         self.profile = TimerGlyphProfile.load_for(self.debuff_id)
+        self.tracker.expect_ocr = bool(self.profile.trusted)
         self._locked_size = None
 
     def auto_region_for_screen(self, screen_width: int, screen_height: int) -> list[int]:
@@ -832,16 +1345,19 @@ class BossDebuffDetector(QThread):
             y1 = min(band_bgr.shape[0], dy + dh)
             if x1 - x0 >= 6 and y1 - y0 >= 5:
                 timer_roi = band_bgr[y0:y1, x0:x1]
-                binary, _threshold = binarize_timer_text(timer_roi)
-                suffix_box, digit_boxes = segment_timer_glyphs(binary)
-                if suffix_box is not None and digit_boxes:
-                    frame.glyph_count = len(digit_boxes)
-                    frame.digit_signature = digit_signature(binary, digit_boxes)
-                    seconds, confidence = self.profile.read_seconds(binary, digit_boxes)
-                    frame.ocr_seconds = seconds
-                    frame.ocr_confidence = confidence
-                else:
+                predicted, _source = self.tracker._remaining(now) if self.tracker.active \
+                    else (None, "")
+                reading = read_timer_value(timer_roi, self.profile, predicted,
+                                           self.text_chroma)
+                if reading.suffix_box is None:
                     timer_roi = None
+                else:
+                    frame.glyph_count = reading.glyph_count
+                    frame.digit_signature = reading.signature
+                    frame.ocr_seconds = reading.value
+                    frame.ocr_confidence = reading.confidence
+                    if reading.value is not None and reading.confidence >= MIN_OCR_CONFIDENCE:
+                        self._calibrate_text_chroma(timer_roi, reading)
         elif match is not None and match.score < self.match_threshold * 0.75:
             # A long miss streak means the strip moved or the boss changed;
             # unlock the scale so the next search covers the full range again.
@@ -849,13 +1365,32 @@ class BossDebuffDetector(QThread):
 
         was_active = self.tracker.active
         state = self.tracker.update(frame, now)
-        if self.collect_samples and state.get("active") and timer_roi is not None:
-            self._save_sample(timer_roi, None, None, None, now)
-        elif was_active and not state.get("active"):
+        if self.collect_samples:
+            if state.get("active") and timer_roi is not None:
+                self._buffer_sample(timer_roi, now)
+            elif was_active and not state.get("active"):
+                self._flush_samples(now)
+        elif self._sample_buffer:
             self._sample_buffer.clear()
         self._last_state = state
         self._emit_state(state)
         return state
+
+    def _calibrate_text_chroma(self, timer_roi, reading: "TimerReading") -> None:
+        """확정된 읽기에서 글자 색을 다시 배운다.
+
+        보스방마다 조명·UI 필터·HDR 때문에 렌더된 살몬색이 조금씩 다르다. 확실히
+        읽은 프레임에서 실제 글자 픽셀의 색조를 표본으로 삼아 목표색을 천천히
+        따라가게 하면, 한 보스에서 학습해도 다른 보스방에서 색 기준이 맞는다.
+        """
+        sampled = sample_text_color(timer_roi, reading.binary, reading.digit_boxes)
+        if sampled is None:
+            return
+        current = self.text_chroma or DEFAULT_TEXT_CHROMA
+        # 급격히 흔들리지 않게 지수 이동 평균으로 섞는다.
+        blend = 0.15
+        self.text_chroma = (current[0] * (1 - blend) + sampled[0] * blend,
+                            current[1] * (1 - blend) + sampled[1] * blend)
 
     def _emit_state(self, state: dict) -> None:
         if not _QT_AVAILABLE:
@@ -879,34 +1414,93 @@ class BossDebuffDetector(QThread):
                 pass
 
     # -- sample collection --------------------------------------------------
-    def _save_sample(self, roi_bgr, binary, suffix_box, digit_boxes, now: float) -> None:
-        """Store timer-ROI crops for calibration.
+    def _buffer_sample(self, roi_bgr, now: float) -> None:
+        """Keep timer-ROI crops of the running cast in memory.
 
-        Labels must be exact, so a crop is only named ``*_09s.png`` once an OCR
-        or 2->1 digit anchor is available.  Everything captured before that is
-        buffered and labelled backwards from the anchor, which turns a single
-        12s cast into samples for 12,11,10,9...1 - full 0-9 digit coverage.
+        Nothing is written while the debuff is up: the only label source that
+        cannot be wrong is the moment the debuff *disappears*.  Labelling from
+        the live estimate is what produced the mislabelled sample set (a real
+        ``17초`` frame stored as ``09s``) and, once trained on, locked the
+        readout onto a single wrong number.
         """
-        if now - self._last_sample_at < 0.45:
+        if now - self._last_sample_at < SAMPLE_MIN_INTERVAL:
             return
         self._last_sample_at = now
-        state = self.tracker.snapshot(now)
-        remaining = state.get("remaining")
-        exact = state.get("source") in ("ocr", "anchor") and remaining is not None
+        self._sample_buffer.append((now, roi_bgr.copy()))
+        del self._sample_buffer[:-SAMPLE_BUFFER_FRAMES]
 
-        if not exact:
-            self._sample_buffer.append((now, roi_bgr.copy()))
-            del self._sample_buffer[:-60]
-            return
+    def _flush_samples(self, now: float) -> dict:
+        """Label the buffered cast backwards from its expiry and write it out.
 
-        pending = self._sample_buffer
-        self._sample_buffer = []
-        pending.append((now, roi_bgr))
+        The game prints ``ceil(remaining)``, so with an expiry time ``T`` every
+        buffered frame has an exact label ``ceil(T - t)``.  ``T`` itself is only
+        known to within one scan, so it is fitted: the digit count of each frame
+        must match the number of digits of its label, and the 2 -> 1 digit switch
+        happens exactly at 9s.  That single degree of freedom is pinned by the
+        observed switch, and the fit score doubles as a validity check for casts
+        that were lost instead of expiring (boss died, region scrolled away).
+        """
+        pending, self._sample_buffer = self._sample_buffer, []
+        result = {"written": 0, "skipped": len(pending), "reason": "", "fit": 0.0}
+        if len(pending) < 4:
+            result["reason"] = "관측 프레임이 너무 적습니다 (최소 4프레임)"
+            return result
+
+        observations = []
         for stamp, crop in pending:
-            label = int(math.ceil(float(remaining) + (now - stamp) - 1e-6))
-            if label < 1 or label > 999:
+            binary, _ = binarize_timer_text(crop)
+            suffix_box, digit_boxes = segment_timer_glyphs(binary)
+            if suffix_box is None or not digit_boxes:
+                observations.append((stamp, crop, 0, False))
+                continue
+            decimal = has_decimal_point(binary, suffix_box, digit_boxes)
+            observations.append((stamp, crop, 0 if decimal else len(digit_boxes), decimal))
+
+        scorable = [o for o in observations if o[2] > 0]
+        if len(scorable) < 4:
+            result["reason"] = "숫자를 읽을 수 있는 프레임이 부족합니다"
+            return result
+
+        base = observations[-1][0]
+        best_fit, best_expiry = -1.0, base
+        for step in range(0, 22):
+            expiry = base + step * 0.05
+            hits = 0
+            for stamp, _crop, count, decimal in observations:
+                label = math.ceil(expiry - stamp - 1e-6)
+                if decimal:
+                    # A sub-second frame can only sit in the final second.
+                    hits += 1 if label <= 1 else -2
+                elif count > 0:
+                    hits += 1 if count == len(str(max(1, label))) else -1
+            score = hits / float(len(scorable))
+            if score > best_fit:
+                best_fit, best_expiry = score, expiry
+
+        result["fit"] = round(best_fit, 3)
+        if best_fit < 0.75:
+            result["reason"] = f"카운트다운 정렬 실패 (일치율 {best_fit:.2f})"
+            return result
+
+        written = 0
+        for stamp, crop, count, decimal in observations:
+            label = int(math.ceil(best_expiry - stamp - 1e-6))
+            if decimal or count <= 0 or not (1 <= label <= 999):
+                continue
+            if count != len(str(label)):
                 continue
             self._write_sample(crop, label)
+            written += 1
+        result["written"] = written
+        result["skipped"] = len(pending) - written
+        if not written:
+            result["reason"] = "라벨과 글리프 수가 맞는 프레임이 없습니다"
+        if _QT_AVAILABLE:
+            try:
+                self.sample_saved.emit(self.debuff_id, {"summary": result})
+            except Exception:
+                pass
+        return result
 
     def _write_sample(self, roi_bgr, label: Optional[int]) -> None:
         self._sample_seq += 1
@@ -949,37 +1543,87 @@ def parse_sample_label(path: Path) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
+def glyph_variants(binary: np.ndarray, box: Iterable[int]) -> list[np.ndarray]:
+    """정규화 글리프 + 획 두께를 한 단계 얇게/두껍게 한 변형.
+
+    같은 숫자라도 어느 채널로 분리했는지에 따라 획 두께가 달라진다. HOG는 두께에
+    민감해서, 한 두께만 배운 프로파일은 다른 채널로 잘라낸 자기 글자를 낮은
+    신뢰도로 밀어낸다(예측은 맞는데 0.6에서 걸림). 두께 변형을 함께 학습하면
+    어느 채널로 읽어도 같은 글자로 붙는다.
+    """
+    x, y, w, h = (int(v) for v in box)
+    crop = binary[max(0, y):y + h, max(0, x):x + w]
+    if crop.size == 0:
+        return []
+    kernel = np.ones((3, 3), np.uint8)
+    shapes = [crop, cv2.erode(crop, kernel), cv2.dilate(crop, kernel)]
+    glyphs = []
+    for shape in shapes:
+        if not shape.any():
+            continue
+        padded = np.zeros_like(binary)
+        padded[max(0, y):y + shape.shape[0], max(0, x):x + shape.shape[1]] = shape
+        glyphs.append(normalize_glyph(padded, (x, y, w, h)))
+    return glyphs
+
+
 def train_timer_profile(sample_paths: Iterable[Path], debuff_id: str = DEFAULT_DEBUFF_ID,
                         base_profile: Optional[TimerGlyphProfile] = None,
-                        output_path: Optional[Path] = None) -> dict:
-    """Build the glyph profile from labelled ``*_09s.png`` timer-ROI crops."""
-    profile = base_profile or TimerGlyphProfile.load_for(debuff_id)
+                        output_path: Optional[Path] = None,
+                        progress=None) -> dict:
+    """Build the glyph profile from labelled ``*_09s.png`` timer-ROI crops.
+
+    The profile is rebuilt from the sample folder every time instead of being
+    appended to the previous one: a single mislabelled training round used to
+    stay in the profile forever.  Training ends with a leave-one-out check, and
+    the score is stored so :attr:`TimerGlyphProfile.trusted` can refuse to use
+    a glyph set that cannot separate its own digits.
+
+    Every sample is learned through *all* colour separations that resolve it,
+    not just the warm channel.  A glyph cut out of a luminance top-hat has
+    slightly thicker strokes than the same glyph cut out of the warm channel, so
+    a profile that only ever saw one channel rejects its own digits the moment a
+    warm boss arena forces the reader onto another channel.
+    """
+    profile = base_profile if base_profile is not None else TimerGlyphProfile(profile_id=debuff_id)
     profile.profile_id = debuff_id
     added = 0
     used = 0
     skipped: list[str] = []
     heights: list[int] = []
-    for path in sample_paths:
+    paths = list(sample_paths)
+    for index, path in enumerate(paths):
+        if progress is not None and not progress(index, len(paths), path):
+            skipped.append("사용자 취소")
+            break
         path = Path(path)
         label = parse_sample_label(path)
         image = read_image(path)
         if label is None or label <= 0 or image is None:
             skipped.append(f"{path.name}: 라벨/이미지 없음")
             continue
-        binary, _ = binarize_timer_text(image)
-        suffix_box, digit_boxes = segment_timer_glyphs(binary)
         text = str(label)
-        if suffix_box is None or len(digit_boxes) != len(text):
-            skipped.append(f"{path.name}: 글리프 {len(digit_boxes)}개 / 기대 {len(text)}개")
-            continue
-        for char, box in zip(text, digit_boxes):
-            if profile.add_digit(int(char), normalize_glyph(binary, box)):
-                added += 1
-            heights.append(int(box[3]))
-        profile.add_suffix(normalize_glyph(binary, suffix_box))
-        used += 1
+        variants = 0
+        for binary, suffix_box, digit_boxes, _mode, _thr, _priority in timer_hypotheses(image):
+            if len(digit_boxes) != len(text):
+                continue
+            if has_decimal_point(binary, suffix_box, digit_boxes):
+                continue
+            for char, box in zip(text, digit_boxes):
+                for glyph in glyph_variants(binary, box):
+                    if profile.add_digit(int(char), glyph):
+                        added += 1
+                heights.append(int(box[3]))
+            profile.add_suffix(normalize_glyph(binary, suffix_box))
+            variants += 1
+        if variants:
+            used += 1
+        else:
+            skipped.append(f"{path.name}: 라벨과 맞는 분리 결과가 없음")
     if heights:
         profile.text_height = int(np.median(heights))
+    profile.accuracy = profile.self_accuracy()
+    profile._loo = profile.accuracy
     profile.source = "calibration"
     path = Path(output_path) if output_path else user_data_root() / "timer_profiles" / f"{debuff_id}.json"
     profile.save(path)
@@ -989,6 +1633,7 @@ def train_timer_profile(sample_paths: Iterable[Path], debuff_id: str = DEFAULT_D
         "added_glyphs": added,
         "digits": profile.digit_coverage,
         "trusted": profile.trusted,
+        "accuracy": round(float(profile.accuracy), 3),
         "missing_digits": [d for d in range(10) if d not in profile.digit_coverage],
         "skipped": skipped[:20],
         "output": str(path),

@@ -54,6 +54,20 @@ def to_band(abs_rect):
     return (x - BAND_ORIGIN[0], y - BAND_ORIGIN[1], w, h)
 
 
+# 인게임 타이머 텍스트 색(1080p 실측 RGB 216,139,111).
+TIMER_TEXT_BGR = (111, 139, 216)
+
+
+def make_timer_roi(digit_count=1, width=44, height=16):
+    """숫자 N개와 '초' 접미사가 있는 합성 타이머 ROI를 만든다."""
+    roi = np.full((height, width, 3), 20, np.uint8)
+    cv2.rectangle(roi, (21, 4), (30, 11), TIMER_TEXT_BGR, -1)      # 초
+    for index in range(digit_count):
+        left = 14 - index * 7
+        cv2.rectangle(roi, (left, 4), (left + 4, 11), TIMER_TEXT_BGR, -1)
+    return roi
+
+
 class IconMatchingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -100,7 +114,40 @@ class TimerTextTests(unittest.TestCase):
         self.assertIsNotNone(suffix)
         self.assertEqual(len(digits), 1)
         self.assertGreater(suffix[2], digits[0][2], "초 글리프가 숫자보다 넓어야 합니다.")
-        self.assertIn(threshold, bdd.TIMER_THRESHOLDS)
+        # 프레임마다 값이 달라지는 임계값 스윕 대신 가장 진한 획에서 유도한다.
+        self.assertGreater(threshold, 0)
+        self.assertEqual(binary.shape[0], read(TIMER_ROI).shape[0] * bdd.TIMER_UPSCALE)
+
+    def test_digit_count_is_stable_on_real_frames(self):
+        """실측 프레임에서 자리수가 라벨과 일치해야 한다.
+
+        임계값이 프레임마다 튀던 구버전에서는 같은 '17초'가 배경에 따라
+        1/2/3개로 흔들렸고, 그 흔들림이 2자리→1자리 앵커를 반복 발동시켜
+        남은 시간이 계속 9초로 되돌아갔다.
+        """
+        samples = sorted((ROOT / "boss_debuff_assets" / "samples" / "verified").glob("*.png"))
+        self.assertGreaterEqual(len(samples), 40)
+        mismatched = []
+        for path in samples:
+            label = bdd.parse_sample_label(path)
+            binary, _ = binarize_timer_text(read(path))
+            suffix, digits = segment_timer_glyphs(binary)
+            if suffix is None or len(digits) != len(str(label)):
+                mismatched.append((path.name, 0 if suffix is None else len(digits)))
+        ratio = 1.0 - len(mismatched) / len(samples)
+        self.assertGreaterEqual(ratio, 0.95, f"자리수 불일치: {mismatched}")
+
+    def test_sub_second_decimal_is_recognized(self):
+        """'0.4초' 같은 소수 표시를 두 자리 숫자로 착각하지 않아야 한다."""
+        binary = np.zeros((64, 176), np.uint8)
+        cv2.rectangle(binary, (50, 14), (60, 45), 255, -1)    # 0
+        cv2.rectangle(binary, (64, 40), (68, 45), 255, -1)    # 소수점
+        cv2.rectangle(binary, (72, 14), (86, 45), 255, -1)    # 4
+        cv2.rectangle(binary, (97, 13), (129, 45), 255, -1)   # 초
+        suffix, digits = segment_timer_glyphs(binary)
+        self.assertIsNotNone(suffix)
+        self.assertEqual(len(digits), 2)
+        self.assertTrue(bdd.has_decimal_point(binary, suffix, digits))
 
     def test_segments_from_band_using_the_matched_cell(self):
         band = read(BAND_A)
@@ -126,13 +173,56 @@ class TimerTextTests(unittest.TestCase):
 
 
 class TimerProfileTests(unittest.TestCase):
-    def test_bundled_seed_is_not_trusted_yet(self):
+    def test_bundled_seed_reads_the_verified_frames(self):
+        """번들 프로파일은 검증된 실측 프레임을 정확히 읽어야 한다.
+
+        boss_debuff_assets/samples/verified 의 파일 이름은 8배 확대 이미지를
+        직접 눈으로 읽어 확정한 값이다. 이 프레임들이 학습 출처이므로 여기서
+        틀리면 프로파일이 자기 데이터조차 설명하지 못한다는 뜻이다.
+        """
         profile = TimerGlyphProfile.load(
             ROOT / "boss_debuff_assets" / "timer_profiles" / f"{DEFAULT_DEBUFF_ID}.json"
         )
         self.assertIsNotNone(profile, "번들 타이머 프로파일이 없습니다.")
-        self.assertIn(9, profile.digit_coverage)
-        self.assertFalse(profile.trusted, "표본이 부족한 프로파일은 신뢰되면 안 됩니다.")
+        self.assertEqual(profile.digit_coverage, list(range(10)))
+        self.assertTrue(profile.trusted)
+        self.assertGreaterEqual(profile.accuracy, bdd.MIN_TRAINED_ACCURACY)
+
+        samples = sorted((ROOT / "boss_debuff_assets" / "samples" / "verified").glob("*.png"))
+        self.assertGreaterEqual(len(samples), 40, "검증 프레임이 함께 커밋되어야 합니다.")
+        read_ok = correct = 0
+        for path in samples:
+            label = bdd.parse_sample_label(path)
+            binary, _ = binarize_timer_text(read(path))
+            suffix, digits = segment_timer_glyphs(binary)
+            if suffix is None or not digits:
+                continue
+            seconds, confidence = profile.read_seconds(binary, digits)
+            if seconds is None:
+                continue
+            read_ok += 1
+            correct += int(seconds == label)
+        self.assertGreaterEqual(read_ok, len(samples) - 3)
+        self.assertGreaterEqual(correct / read_ok, 0.95,
+                                f"검증 프레임 인식률 {correct}/{read_ok}")
+
+    def test_profile_that_cannot_separate_its_digits_is_not_trusted(self):
+        """라벨이 잘못 붙은 샘플로 학습하면 숫자 커버리지만 채워진다.
+
+        구버전은 커버리지만 보고 신뢰했기 때문에, 오염된 프로파일이 계속
+        엉뚱한 숫자를 확신에 차서 내보냈다.
+        """
+        profile = TimerGlyphProfile(profile_id="t")
+        glyph = np.zeros((16, 12), np.uint8)
+        cv2.rectangle(glyph, (3, 2), (8, 13), 255, -1)
+        for digit in range(10):
+            noisy = glyph.copy()
+            noisy[1, digit] = 255      # 라벨만 다르고 모양은 사실상 동일
+            profile.add_digit(digit, noisy)
+            profile.add_digit(digit, np.roll(noisy, 1, axis=1))
+        self.assertEqual(profile.digit_coverage, list(range(10)))
+        self.assertLess(profile.self_accuracy(), bdd.MIN_TRAINED_ACCURACY)
+        self.assertFalse(profile.trusted, "구분 못 하는 글리프 집합은 신뢰되면 안 됩니다.")
 
     def test_untrusted_profile_never_returns_a_number(self):
         profile = TimerGlyphProfile(profile_id="t")
@@ -213,13 +303,30 @@ class TrackerTests(unittest.TestCase):
         self.assertEqual(state["source"], "unknown")
 
     def test_two_to_one_digit_transition_anchors_nine_seconds(self):
-        _state, now = self.feed(5, 100.0, glyph_count=2)
+        # 2자리 상태가 충분히 유지된 뒤에 바뀔 때만 앵커가 걸린다.
+        _state, now = self.feed(12, 100.0, glyph_count=2)
         state, now = self.feed(3, now, glyph_count=1)
         self.assertEqual(state["source"], "anchor")
         # The anchor lands on the 2nd single-digit frame, one frame before the last.
         self.assertAlmostEqual(state["remaining"], 8.9, delta=0.05)
         later = self.tracker.snapshot(now + 4.0)
         self.assertAlmostEqual(later["remaining"], 8.9 - 4.0 - 0.1, delta=0.05)
+
+    def test_flickering_digit_count_never_re_anchors_to_nine(self):
+        """한 프레임 튀는 자리수 변화로 카운트다운이 9초로 되돌아가면 안 된다.
+
+        이것이 '계속 8초로만 보이던' 증상의 직접 원인이었다.
+        """
+        _state, now = self.feed(12, 100.0, glyph_count=2)
+        state, now = self.feed(3, now, glyph_count=1)
+        self.assertEqual(state["source"], "anchor")
+        anchored_at = state["remaining"]
+        for _ in range(6):
+            # 한 자리 숫자를 읽는 도중 두 자리로 잘못 쪼개졌다가 되돌아온다.
+            _state, now = self.feed(2, now, glyph_count=2)
+            state, now = self.feed(2, now, glyph_count=1)
+        self.assertLess(state["remaining"], anchored_at,
+                        "앵커가 다시 걸려 남은 시간이 되돌아갔습니다.")
 
     def test_anchor_learns_total_duration_for_the_next_cast(self):
         _state, now = self.feed(2, 100.0, glyph_count=2)   # appears at t=100.0
@@ -239,16 +346,51 @@ class TrackerTests(unittest.TestCase):
 
     def test_confident_ocr_overrides_and_rejects_upward_jumps(self):
         _state, now = self.feed(3, 100.0, glyph_count=1)
+        # 한 프레임만으로는 앵커가 걸리지 않는다. 서로 앞뒤가 맞는 두 프레임이 필요하다.
         state = self.tracker.update(
             DebuffFrame(True, 0.99, (10, 10, 26, 26), glyph_count=1,
-                        ocr_seconds=7, ocr_confidence=0.95), now)
+                        ocr_seconds=8, ocr_confidence=0.95), now)
+        self.assertEqual(state["source"], "unknown")
+        state = self.tracker.update(
+            DebuffFrame(True, 0.99, (10, 10, 26, 26), glyph_count=1,
+                        ocr_seconds=7, ocr_confidence=0.95), now + 1.0)
         self.assertEqual(state["source"], "ocr")
         self.assertAlmostEqual(state["remaining"], 7.0, delta=0.05)
         # A misread that claims more time than physically possible is dropped.
         state = self.tracker.update(
             DebuffFrame(True, 0.99, (10, 10, 26, 26), glyph_count=1,
-                        ocr_seconds=59, ocr_confidence=0.99), now + 1.0)
+                        ocr_seconds=59, ocr_confidence=0.99), now + 2.0)
         self.assertAlmostEqual(state["remaining"], 6.0, delta=0.05)
+
+    def test_single_ocr_misread_between_good_frames_is_ignored(self):
+        _state, now = self.feed(3, 100.0, glyph_count=1)
+        for value, offset in ((9, 0.0), (8, 1.0)):
+            state = self.tracker.update(
+                DebuffFrame(True, 0.99, (10, 10, 26, 26), glyph_count=1,
+                            ocr_seconds=value, ocr_confidence=0.95), now + offset)
+        self.assertEqual(state["source"], "ocr")
+        # 배경 잡음이 글리프에 붙어 3초로 잘못 읽힌 한 프레임.
+        state = self.tracker.update(
+            DebuffFrame(True, 0.99, (10, 10, 26, 26), glyph_count=1,
+                        ocr_seconds=3, ocr_confidence=0.95), now + 1.5)
+        self.assertAlmostEqual(state["remaining"], 7.5, delta=0.05)
+
+    def test_remaining_never_exceeds_the_duration_when_time_looks_backwards(self):
+        """경과 시간이 음수로 보이면 남은 시간이 부풀지 않아야 한다.
+
+        스레드가 다시 뜨거나 서로 다른 시간축이 섞이면 now 가 기준 시각보다
+        작아질 수 있다. 그때 음수 경과를 그대로 빼면 10초 디버프가 1만 초로
+        표시된다.
+        """
+        tracker = BossDebuffTracker(DEFAULT_DEBUFF_ID, configured_duration=10.0)
+        for _ in range(ACTIVATE_FRAMES + 1):
+            tracker.update(DebuffFrame(True, 0.99, (0, 0, 26, 26)), 9000.0)
+        earlier = tracker.snapshot(500.0)
+        self.assertEqual(earlier["source"], "duration")
+        self.assertAlmostEqual(earlier["remaining"], 10.0, delta=0.01)
+
+        tracker.set_anchor(7.0, 9000.0, "ocr")
+        self.assertAlmostEqual(tracker.snapshot(500.0)["remaining"], 7.0, delta=0.01)
 
     def test_low_confidence_ocr_is_ignored(self):
         _state, now = self.feed(3, 100.0, glyph_count=1)
@@ -259,7 +401,7 @@ class TrackerTests(unittest.TestCase):
         self.assertIsNone(state["remaining"])
 
     def test_reappearance_restarts_the_countdown(self):
-        _state, now = self.feed(3, 100.0, glyph_count=2)
+        _state, now = self.feed(12, 100.0, glyph_count=2)
         _state, now = self.feed(3, now, glyph_count=1)
         _state, now = self.feed(DEACTIVATE_FRAMES, now, matched=False)
         state, _ = self.feed(3, now, glyph_count=2)
@@ -317,8 +459,17 @@ class DetectorTests(unittest.TestCase):
             for _ in range(ACTIVATE_FRAMES + 1):
                 state = detector.analyze_band(band, now)
                 now += 0.1
+            if detector.profile.trusted:
+                # 숫자를 읽을 수 있는 상태에서는 첫 순간에 추정값을 내보내지 않는다.
+                # 학습된 총 지속시간이 어긋나 있으면 캐스트 시작마다 틀린 숫자가
+                # 스쳐 지나가기 때문이다(28초로 시작하던 증상).
+                self.assertEqual(state["source"], "unknown")
+                self.assertIsNone(state["remaining"])
+            while now < 500.0 + bdd.OCR_GRACE_SEC + 0.3:
+                state = detector.analyze_band(band, now)
+                now += 0.1
             self.assertEqual(state["source"], "duration")
-            self.assertAlmostEqual(state["remaining"], 9.9, delta=0.15)
+            self.assertAlmostEqual(state["remaining"], 10.0 - (now - 500.0 - 0.1), delta=0.2)
 
     def test_auto_region_covers_the_reference_cell(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -331,31 +482,55 @@ class DetectorTests(unittest.TestCase):
             # The band must also contain the timer text under the cell.
             self.assertGreaterEqual(y + h, 194)
 
-    def test_sample_collection_labels_retroactively_from_the_anchor(self):
+    def test_samples_are_labelled_from_the_moment_the_debuff_expires(self):
+        """라벨은 살아 있는 추정값이 아니라 '사라진 시점'에서 역산해야 한다.
+
+        추정값으로 라벨을 붙이면 자기참조가 된다: 잘못 추정한 9초가 파일로
+        저장되고, 그 파일로 학습한 프로파일이 다시 9초를 확신하게 된다.
+        """
         with tempfile.TemporaryDirectory() as temp:
             detector = self.make_detector(temp)
             detector.configure(collect_samples=True)
             detector.sample_root = Path(temp) / "samples"
-            band = read(BAND_A)
+            band = read(BAND_A)          # 한 자리 숫자('9초')가 보이는 실측 밴드
             now = 500.0
-            for _ in range(4):
+            for _ in range(8):
                 detector.analyze_band(band, now)
                 now += 0.5
-            # Nothing is exactly known yet, so no crop may be labelled on disk.
+            # 디버프가 살아 있는 동안에는 단 한 장도 저장되지 않는다.
             self.assertFalse(list((Path(temp) / "samples").glob("*.png")))
-            self.assertGreaterEqual(len(detector._sample_buffer), 2)
+            self.assertGreaterEqual(len(detector._sample_buffer), 4)
 
-            # A 2->1 digit transition (or a confident OCR read) makes the whole
-            # buffered cast exactly labelable.
-            detector.tracker.set_anchor(9.0, now, "anchor")
-            detector.analyze_band(band, now)
+            blank = np.zeros_like(band)
+            for _ in range(DEACTIVATE_FRAMES):
+                detector.analyze_band(blank, now)
+                now += 0.1
+
             files = sorted(p.name for p in (Path(temp) / "samples").glob("*.png"))
-            self.assertGreaterEqual(len(files), 3)
-            self.assertTrue(all(name.endswith("s.png") for name in files), files)
+            self.assertTrue(files, "소멸 시점에 버퍼가 저장되어야 합니다.")
             labels = sorted(bdd.parse_sample_label(Path(name)) for name in files)
-            # The live crop is the 9s anchor itself, buffered crops go 10s, 11s...
-            self.assertEqual(labels[0], 9)
-            self.assertEqual(labels[-1], 11)
+            # 마지막 프레임이 1초, 0.5초 간격이므로 한 자리 라벨만 나온다.
+            self.assertEqual(labels[0], 1)
+            self.assertTrue(all(1 <= label <= 9 for label in labels), labels)
+
+    def test_cast_that_does_not_match_the_countdown_is_discarded(self):
+        """자리수와 라벨이 어긋나는 관측은 한 장도 저장하지 않는다.
+
+        두 자리 숫자가 보이는 프레임이 1~4초 구간에 놓일 수는 없다. 보스가
+        죽거나 영역이 벗어나 관측이 끊긴 경우가 여기에 해당한다.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            detector = self.make_detector(temp)
+            detector.configure(collect_samples=True)
+            detector.sample_root = Path(temp) / "samples"
+            roi = make_timer_roi(digit_count=2)
+            detector._sample_buffer = [(500.0 + index * 0.5, roi.copy()) for index in range(8)]
+
+            result = detector._flush_samples(504.0)
+
+            self.assertEqual(result["written"], 0)
+            self.assertTrue(result["reason"])
+            self.assertFalse(list((Path(temp) / "samples").glob("*.png")))
 
 
 if __name__ == "__main__":

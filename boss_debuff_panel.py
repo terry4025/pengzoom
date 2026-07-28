@@ -8,11 +8,12 @@ developed in parallel, so this widget only needs its two public calls
 from __future__ import annotations
 
 import math
+import re
 import time
 
 import cv2
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QColor, QImage, QPixmap
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 import boss_debuff_detector as bdd
@@ -21,6 +22,80 @@ import boss_debuff_detector as bdd
 # skill badges, so a boss debuff report can never be drawn as a fake skill.
 PARTY_STATE_PREFIX = "_bossdebuff:"
 REPORT_STALE_AFTER = 6.0   # seconds without a refresh before a report is dropped
+
+_RGBA_RE = re.compile(
+    r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)")
+
+
+def parse_theme_color(value, fallback: QColor) -> QColor:
+    """THEMES 프리셋의 '#hex' / 'rgba(r,g,b,a)' 문자열을 QColor로 바꾼다.
+
+    magnifier 의 동일 헬퍼를 import 하면 순환 참조가 되므로 여기에 둔다.
+    """
+    if isinstance(value, QColor):
+        return QColor(value)
+    if isinstance(value, str):
+        match = _RGBA_RE.search(value)
+        if match:
+            red, green, blue, alpha = match.groups()
+            alpha_255 = 255 if alpha is None else int(round(float(alpha) * 255))
+            return QColor(int(red), int(green), int(blue), max(0, min(255, alpha_255)))
+        stripped = value.strip()
+        if stripped.startswith("#"):
+            color = QColor(stripped)
+            if color.isValid():
+                return color
+    return QColor(fallback)
+
+
+def css_rgba(color: QColor, alpha: float = None) -> str:
+    """QColor를 QSS 에 넣을 rgba() 문자열로 만든다."""
+    opacity = color.alphaF() if alpha is None else max(0.0, min(1.0, float(alpha)))
+    return f"rgba({color.red()}, {color.green()}, {color.blue()}, {opacity:.3f})"
+
+
+def blend_over(front: QColor, back: QColor) -> QColor:
+    """알파가 있는 색을 배경 위에 합성한 실제 표시색."""
+    alpha = front.alphaF()
+    return QColor(
+        int(round(front.red() * alpha + back.red() * (1.0 - alpha))),
+        int(round(front.green() * alpha + back.green() * (1.0 - alpha))),
+        int(round(front.blue() * alpha + back.blue() * (1.0 - alpha))),
+    )
+
+
+def _relative_luminance(color: QColor) -> float:
+    def channel(value: int) -> float:
+        srgb = value / 255.0
+        return srgb / 12.92 if srgb <= 0.03928 else ((srgb + 0.055) / 1.055) ** 2.4
+    return (0.2126 * channel(color.red())
+            + 0.7152 * channel(color.green())
+            + 0.0722 * channel(color.blue()))
+
+
+def wcag_contrast(first: QColor, second: QColor) -> float:
+    """WCAG 명도 대비비. 본문 글자는 4.5 이상이 필요하다."""
+    a, b = _relative_luminance(first), _relative_luminance(second)
+    lighter, darker = max(a, b), min(a, b)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def readable_on(color: QColor, background: QColor, minimum: float = 4.5) -> QColor:
+    """배경 대비가 부족한 색의 명도만 조절해 읽을 수 있게 만든다.
+
+    프리셋의 강조색(주황·빨강)은 어두운 배경을 전제로 골라져 있어서, 밝은 테마
+    위에 그대로 올리면 대비가 1.6까지 떨어진다. 색조/채도는 유지하고 명도만
+    배경 반대 방향으로 옮긴다.
+    """
+    adjusted = QColor(color)
+    darken = background.lightnessF() > 0.5
+    for _ in range(30):
+        if wcag_contrast(adjusted, background) >= minimum:
+            break
+        hue, saturation, lightness, alpha = adjusted.getHslF()
+        lightness = max(0.0, lightness - 0.035) if darken else min(1.0, lightness + 0.035)
+        adjusted.setHslF(hue, saturation, lightness, alpha)
+    return adjusted
 
 
 def party_state_key(debuff_id: str = bdd.DEFAULT_DEBUFF_ID) -> str:
@@ -63,8 +138,14 @@ class BossDebuffBanner(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         self._reports: dict[str, dict] = {}
-        self._accent_active = "#ff453a"
-        self._accent_idle = "#8e8e93"
+        # 테마에서 채워지는 색. 디버프 이름은 예전에 색을 지정하지 않아
+        # 앱 기본 팔레트(어두운 글자)를 그대로 썼고, 배경이 어두운 프리셋에서는
+        # 검은 글자가 검은 배경 위에 놓여 보이지 않았다.
+        self._c_text = QColor(245, 245, 247)
+        self._c_bg = QColor(18, 18, 23)
+        self._accent_active = QColor(48, 209, 88)
+        self._accent_idle = QColor(142, 142, 147)
+        self._card_bg_active = QColor(28, 44, 32)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(10, 6, 10, 6)
@@ -99,16 +180,55 @@ class BossDebuffBanner(QFrame):
         self.icon_label.setFixedSize(size, size)
         self.icon_label.setPixmap(_icon_pixmap(self.debuff_id, size))
         self.name_label.setStyleSheet(
-            f"font-size: {int(12 * self.ui_scale)}px; font-weight: 700; background: transparent; border: none;")
+            f"font-size: {int(12 * self.ui_scale)}px; font-weight: 700; "
+            f"color: {css_rgba(self._c_text, 1.0)}; background: transparent; border: none;")
         self.detail_label.setStyleSheet(
-            f"font-size: {int(9 * self.ui_scale)}px; font-weight: 600; color: #8e8e93; "
-            "background: transparent; border: none;")
-        self.value_label.setStyleSheet(
-            f"font-size: {int(18 * self.ui_scale)}px; font-weight: 800; background: transparent; border: none;")
+            f"font-size: {int(9 * self.ui_scale)}px; font-weight: 600; "
+            f"color: {css_rgba(self._c_text, 0.60)}; background: transparent; border: none;")
+        self.value_label.setStyleSheet(self._value_style(self._accent_idle))
+
+    def _value_style(self, color: QColor) -> str:
+        return (f"font-size: {int(18 * self.ui_scale)}px; font-weight: 800; "
+                f"color: {css_rgba(color, 1.0)}; background: transparent; border: none;")
+
+    def _card_style(self, active: bool) -> str:
+        """카드 배경도 테마에서 유도한다.
+
+        예전에는 흰색 3% / 빨강 10%로 고정돼 있어서 밝은 테마에서는 아무것도
+        보이지 않았다.
+        """
+        if active:
+            fill = css_rgba(self._accent_active, 0.12)
+            line = css_rgba(self._accent_active, 0.38)
+        else:
+            fill = css_rgba(self._c_text, 0.05)
+            line = css_rgba(self._c_text, 0.10)
+        return ("QFrame.BossDebuffCard { background-color: %s; "
+                "border: 1.2px solid %s; border-radius: 12px; }" % (fill, line))
 
     def apply_theme(self, theme: dict) -> None:
-        self._accent_active = theme.get("cooldown", "#ff453a")
-        self._accent_idle = "#8e8e93"
+        theme = theme or {}
+        self._c_bg = parse_theme_color(theme.get("bg"), QColor(18, 18, 23))
+        # 디버프 이름/설명은 테마의 본문 글자색을 그대로 쓴다. 프리셋마다 배경과
+        # 대비되도록 정의된 값이므로 어떤 테마에서도 읽을 수 있다.
+        default_text = QColor(29, 29, 31) if self._c_bg.lightnessF() > 0.5 else QColor(245, 245, 247)
+        self._c_text = parse_theme_color(theme.get("font_color"), default_text)
+
+        # 강조색은 배경 위에 실제로 합성된 카드 색과 대비를 재서, 부족하면
+        # 명도를 조절한다. 밝은 테마에서 주황색 남은 시간이 안 보이던 문제.
+        # 지속 중은 '감지되어 정보가 있다'는 신호이므로 스킬 준비 완료와 같은
+        # 초록(ready)을 쓴다. 없을 때는 회색(OFF).
+        opaque_bg = QColor(self._c_bg.red(), self._c_bg.green(), self._c_bg.blue())
+        active_raw = parse_theme_color(theme.get("ready"), QColor(48, 209, 88))
+        idle_raw = parse_theme_color(theme.get("accent_secondary"), QColor(142, 142, 147))
+        tint = QColor(active_raw)
+        tint.setAlphaF(0.12)
+        self._card_bg_active = blend_over(tint, opaque_bg)
+        # 목표를 6.0으로 잡는다. 패널은 반투명이라 게임 화면이 비쳐 실제 배경이
+        # 이보다 밝거나 어두워질 수 있어서, 기준선(4.5)에 여유를 둬야 한다.
+        self._accent_active = readable_on(active_raw, self._card_bg_active, 6.0)
+        self._accent_idle = readable_on(idle_raw, opaque_bg, 3.5)
+        self.apply_scale(self.ui_scale)
         self.refresh()
 
     # -- report ingestion ---------------------------------------------------
@@ -182,13 +302,9 @@ class BossDebuffBanner(QFrame):
         origin, report = self._best_report()
         if report is None:
             self.value_label.setText("OFF")
-            self.value_label.setStyleSheet(
-                f"font-size: {int(18 * self.ui_scale)}px; font-weight: 800; color: {self._accent_idle}; "
-                "background: transparent; border: none;")
+            self.value_label.setStyleSheet(self._value_style(self._accent_idle))
             self.detail_label.setText("보스에게 없음")
-            self.setStyleSheet(
-                "QFrame.BossDebuffCard { background-color: rgba(255,255,255,0.03); "
-                "border: 1.2px solid rgba(255,255,255,0.06); border-radius: 12px; }")
+            self.setStyleSheet(self._card_style(False))
             return
 
         deadline = report.get("deadline")
@@ -214,12 +330,8 @@ class BossDebuffBanner(QFrame):
             detail += f" · {origin} 감지"
 
         self.detail_label.setText(detail)
-        self.value_label.setStyleSheet(
-            f"font-size: {int(18 * self.ui_scale)}px; font-weight: 800; color: {self._accent_active}; "
-            "background: transparent; border: none;")
-        self.setStyleSheet(
-            "QFrame.BossDebuffCard { background-color: rgba(255,69,58,0.10); "
-            "border: 1.2px solid rgba(255,69,58,0.35); border-radius: 12px; }")
+        self.value_label.setStyleSheet(self._value_style(self._accent_active))
+        self.setStyleSheet(self._card_style(True))
 
     def tick(self) -> None:
         """Called from the party panel's 60fps timer."""

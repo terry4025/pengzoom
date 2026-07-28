@@ -86,8 +86,8 @@ class BossDebuffWiringTests(unittest.TestCase):
         titles = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
         self.assertIn("보스 디버프", titles)
         self.assertEqual(dialog.boss_region_label.text(), "영역 미지정")
-        # The seed glyph set is intentionally not trusted yet.
-        self.assertIn("표본 부족", dialog.boss_train_status.text())
+        # 번들 글리프 세트는 검증된 실측 프레임으로 학습되어 바로 쓸 수 있다.
+        self.assertIn("숫자 인식 사용 중", dialog.boss_train_status.text())
 
     def test_region_capture_enables_the_detector(self):
         self.window.on_boss_debuff_region_captured(560, 130, 780, 80, None)
@@ -211,12 +211,64 @@ class BossDebuffWiringTests(unittest.TestCase):
             state = detector.analyze_band(band, now)
             now += 0.1
         self.assertTrue(state["active"])
+        # 숫자 인식이 가능한 상태라면 첫 순간에는 추정값을 내보내지 않는다.
+        while now < 900.0 + bdd.OCR_GRACE_SEC + 0.3:
+            state = detector.analyze_band(band, now)
+            now += 0.1
         _app.processEvents()   # deliver the queued debuff_updated signal
 
         banner = self.window.party_panel.boss_banner
         self.assertBannerShown(banner)
         self.assertEqual(banner.value_label.text(), "10초")
         self.assertIn("추정", banner.detail_label.text())
+
+
+class BannerThemeContrastTests(unittest.TestCase):
+    """모든 테마 프리셋에서 배너 글자가 읽히는지 검사한다.
+
+    디버프 이름은 예전에 색을 지정하지 않아 앱 기본 팔레트(어두운 글자)를 그대로
+    썼다. 배경이 어두운 프리셋에서는 검은 글자가 검은 배경 위에 놓여 보이지
+    않았고, 반대로 남은 시간 강조색(주황)은 밝은 프리셋에서 대비가 1.6까지
+    떨어졌다.
+    """
+
+    MINIMUM = 4.5
+
+    @unittest.skipUnless(QT_READY, QT_ERROR)
+    def test_every_theme_keeps_the_banner_readable(self):
+        import boss_debuff_panel
+
+        banner = boss_debuff_panel.BossDebuffBanner()
+        self.addCleanup(banner.deleteLater)
+        worst = ("", 99.0)
+        for name, theme in magnifier.THEMES.items():
+            banner.apply_theme(theme)
+            background = boss_debuff_panel.parse_theme_color(theme.get("bg"), None) \
+                if theme.get("bg") else None
+            self.assertIsNotNone(background, f"{name}: bg 정의 없음")
+            opaque = boss_debuff_panel.QColor(
+                background.red(), background.green(), background.blue())
+            tint = boss_debuff_panel.QColor(banner._accent_active)
+            tint.setAlphaF(0.12)
+            card = boss_debuff_panel.blend_over(tint, opaque)
+            for label, colour in (("이름", banner._c_text),
+                                  ("남은 시간", banner._accent_active)):
+                ratio = boss_debuff_panel.wcag_contrast(colour, card)
+                if ratio < worst[1]:
+                    worst = (f"{name} {label}", ratio)
+                self.assertGreaterEqual(
+                    ratio, self.MINIMUM,
+                    f"{name} 테마의 '{label}' 대비가 {ratio:.2f} 입니다 "
+                    f"(기준 {self.MINIMUM}).")
+        self.assertGreaterEqual(len(magnifier.THEMES), 6, "테마 프리셋이 줄었습니다.")
+
+    @unittest.skipUnless(QT_READY, QT_ERROR)
+    def test_theme_presets_are_complete(self):
+        required = {"bg", "border", "accent", "accent_secondary", "ready",
+                    "cooldown", "card_bg", "card_border", "shadow", "font_color"}
+        for name, theme in magnifier.THEMES.items():
+            missing = required - set(theme)
+            self.assertFalse(missing, f"{name} 프리셋에 빠진 키: {missing}")
 
 
 if __name__ == "__main__":

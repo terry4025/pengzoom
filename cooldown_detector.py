@@ -262,6 +262,13 @@ class CooldownDetector(QThread):
             if self.developer_capture_enabled and name in self._developer_sessions:
                 continue
 
+            # 쿨타임이 아직 돌고 있고 스킬이 사용 가능 상태로 인식되지도 않았다면,
+            # 이 키 입력은 실제 사용이 아니라 헛손질(또는 OS 키 반복)이다. 여기서
+            # 타이머를 다시 시작하면 진행 바가 0에 닿기 전에 되돌아간다.
+            if slot.cooldown_duration > 0 and self._manual_timer_running(slot, trigger_wall) \
+                    and not slot.is_ready:
+                continue
+
             # Manual time owns the displayed/broadcast remaining seconds.
             # Ready still requires the saved skill template to be confirmed.
             if slot.cooldown_duration > 0:
@@ -270,6 +277,14 @@ class CooldownDetector(QThread):
 
             if self.developer_capture_enabled:
                 self._start_developer_capture(name, slot, trigger_mono, now_mono)
+
+    @staticmethod
+    def _manual_timer_running(slot, at_wall=None):
+        """수동 쿨타임이 아직 남아 있는지."""
+        if slot.cooldown_start_time <= 0.0 or slot.cooldown_duration <= 0:
+            return False
+        at_wall = time.time() if at_wall is None else at_wall
+        return (at_wall - slot.cooldown_start_time) < slot.cooldown_duration
 
     @staticmethod
     def _safe_capture_name(name):
@@ -434,6 +449,19 @@ class CooldownDetector(QThread):
         if slot.cooldown_start_time > 0.0:
             return max(0, int(np.ceil(slot.cooldown_duration - (time.time() - slot.cooldown_start_time))))
         return 0
+
+    def get_remaining_seconds_precise(self, name):
+        """남은 시간을 초 단위 실수로 반환한다.
+
+        ceil 한 정수를 파티 동기화로 내보내면, 수신 측이 계산하는 종료 시각이
+        보고마다 최대 1초씩 흔들린다. 그 흔들림이 '재사용'으로 오인되면 진행
+        바가 중간에서 되돌아가므로, 동기화에는 정밀 값을 쓴다.
+        """
+        slot = self.slots.get(name)
+        if not slot or slot.cooldown_start_time <= 0.0:
+            return 0.0
+        elapsed = time.time() - slot.cooldown_start_time
+        return max(0.0, float(slot.cooldown_duration) - elapsed)
 
     def get_ocr_remaining_seconds(self, name):
         slot = self.slots.get(name)

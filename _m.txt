@@ -1,0 +1,81 @@
+===== 따뜻한 주황
+  dark_grenade_023_08s.png
+    warm    f=0.42 peak=150 ink=0.32 suffix=N digits=0 gate=False
+    warm    f=0.33 peak=150 ink=0.36 suffix=N digits=0 gate=False
+    warm    f=0.55 peak=150 ink=0.26 suffix=N digits=0 gate=False
+    chroma  f=0.42 peak=152 ink=0.41 suffix=N digits=0 gate=False
+    chroma  f=0.33 peak=152 ink=0.46 suffix=N digits=0 gate=False
+    chroma  f=0.55 peak=152 ink=0.24 suffix=N digits=0 gate=False
+    bright  f=0.42 peak=170 ink=0.18 suffix=Y digits=1 gate=True
+    bright  f=0.33 peak=170 ink=0.34 suffix=N digits=0 gate=False
+    bright  f=0.55 peak=170 ink=0.07 suffix=Y digits=1 gate=True
+    dark    f=0.42 peak=166 ink=0.19 suffix=Y digits=0 gate=False
+    dark    f=0.33 peak=166 ink=0.27 suffix=Y digits=0 gate=False
+    dark    f=0.55 peak=166 ink=0.08 suffix=N digits=0 gate=False
+  dark_grenade_005_17s.png
+    warm    f=0.42 peak=154 ink=0.21 suffix=Y digits=0 gate=False
+    warm    f=0.33 peak=154 ink=0.30 suffix=Y digits=0 gate=False
+    warm    f=0.55 peak=154 ink=0.14 suffix=Y digits=0 gate=False
+    chroma  f=0.42 peak=149 ink=0.24 suffix=Y digits=0 gate=False
+    chroma  f=0.33 peak=149 ink=0.30 suffix=Y digits=0 gate=False
+    chroma  f=0.55 peak=149 ink=0.16 suffix=Y digits=0 gate=False
+    bright  f=0.42 peak=120 ink=0.09 suffix=Y digits=1 gate=False
+    bright  f=0.33 peak=120 ink=0.12 suffix=Y digits=1 gate=False
+    bright  f=0.55 peak=120 ink=0.05 suffix=Y digits=1 gate=False
+    dark    f=0.42 peak=128 ink=0.09 suffix=Y digits=1 gate=True
+    dark    f=0.33 peak=128 ink=0.15 suffix=Y digits=0 gate=False
+    dark    f=0.55 peak=128 ink=0.04 suffix=Y digits=0 gate=False
+===== 글자색과 유사한 살몬
+  dark_grenade_023_08s.png
+    warm    f=0.42 peak=119 ink=0.33 suffix=N digits=0 gate=False
+    warm    f=0.33 peak=119 ink=0.36 suffix=N digits=0 gate=False
+    warm    f=0.55 peak=119 ink=0.29 suffix=N digits=0 gate=False
+    chroma  f=0.42 peak=153 ink=0.40 suffix=N digits=0 gate=False
+    chroma  f=0.33 peak=153 ink=0.45 suffix=N digits=0 gate=False
+    chroma  f=0.55 peak=153 ink=0.32 suffix=N digits=0 gate=False
+    bright  f=0.42 peak=170 ink=0.20 suffix=Y digits=0 gate=False
+    bright  f=0.33 peak=170 ink=0.35 suffix=N digits=0 gate=False
+    bright  f=0.55 peak=170 ink=0.07 suffix=Y digits=1 gate=True
+    dark    f=0.42 peak=166 ink=0.18 suffix=Y digits=0 gate=False
+    dark    f=0.33 peak=166 ink=0.26 suffix=Y digits=0 gate=False
+    dark    f=0.55 peak=166 ink=0.08 suffix=N digits=0 gate=False
+  dark_grenade_005_17s.png
+    warm    f=0.42 peak=132 ink=0.21 suffix=Y digits=0 gate=False
+    warm    f=0.33 peak=132 ink=0.29 suffix=Y digits=0 gate=False
+    warm    f=0.55 peak=132 ink=0.15 suffix=Y digits=0 gate=False
+    chroma  f=0.42 peak=149 ink=0.29 suffix=Y digits=0 gate=False
+    chroma  f=0.33 peak=149 ink=0.37 suffix=N digits=0 gate=False
+    chroma  f=0.55 peak=149 ink=0.20 suffix=Y digits=0 gate=False
+    bright  f=0.42 peak=120 ink=0.09 suffix=Y digits=2 gate=False
+    bright  f=0.33 peak=120 ink=0.12 suffix=Y digits=1 gate=True
+    bright  f=0.55 peak=120 ink=0.04 suffix=Y digits=1 gate=False
+    dark    f=0.42 peak=128 ink=0.09 suffix=Y digits=1 gate=True
+    dark    f=0.33 peak=128 ink=0.13 suffix=Y digits=0 gate=False
+    dark    f=0.55 peak=128 ink=0.04 suffix=Y digits=0 gate=False
+===== 용암 붉은색
+  dark_grenade_023_08s.png
+    warm    f=0.42 peak=183 ink=0.28 suffix=N digits=0 gate=False
+    warm    f=0.33 peak=183 ink=0.33 suffix=N digits=0 gate=False
+    warm    f=0.55 peak=183 ink=0.20 suffix=N digits=0 gate=False
+    chroma  f=0.42 peak=152 ink=0.35 suffix=N digits=0 gate=False
+    chroma  f=0.33 peak=152 ink=0.43 suffix=N digits=0 gate=False
+    chroma  f=0.55 peak=152 ink=0.23 suffix=N digits=0 gate=False
+    bright  f=0.42 peak=170 ink=0.13 suffix=Y digits=1 gate=False
+    bright  f=0.33 peak=170 ink=0.24 suffix=Y digits=2 gate=False
+    bright  f=0.55 peak=170 ink=0.07 suffix=Y digits=1 gate=True
+    dark    f=0.42 peak=166 ink=0.17 suffix=Y digits=1 gate=False
+    dark    f=0.33 peak=166 ink=0.33 suffix=Y digits=0 gate=False
+    dark    f=0.55 peak=166 ink=0.07 suffix=N digits=0 gate=False
+  dark_grenade_005_17s.png
+    warm    f=0.42 peak=164 ink=0.22 suffix=Y digits=1 gate=False
+    warm    f=0.33 peak=164 ink=0.30 suffix=Y digits=0 gate=False
+    warm    f=0.55 peak=164 ink=0.14 suffix=Y digits=1 gate=False
+    chroma  f=0.42 peak=149 ink=0.25 suffix=Y digits=0 gate=False
+    chroma  f=0.33 peak=149 ink=0.33 suffix=Y digits=0 gate=False
+    chroma  f=0.55 peak=149 ink=0.16 suffix=Y digits=0 gate=False
+    bright  f=0.42 peak=120 ink=0.19 suffix=Y digits=3 gate=False
+    bright  f=0.33 peak=120 ink=0.36 suffix=Y digits=1 gate=False
+    bright  f=0.55 peak=120 ink=0.07 suffix=Y digits=2 gate=False
+    dark    f=0.42 peak=128 ink=0.17 suffix=Y digits=3 gate=False
+    dark    f=0.33 peak=128 ink=0.32 suffix=Y digits=1 gate=False
+    dark    f=0.55 peak=128 ink=0.06 suffix=N digits=0 gate=False

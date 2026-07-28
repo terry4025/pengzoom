@@ -1,0 +1,26 @@
+--- dark_grenade_059_10s.png label=10
+  warm    f=0.42 ink=0.07 digits=2 gate=True sh=31 widths=[9, 21] heights=[30, 32] baselines=[44, 45] sbase=45
+  warm    f=0.33 ink=0.09 digits=2 gate=True sh=33 widths=[10, 22] heights=[32, 32] baselines=[45, 45] sbase=46
+  warm    f=0.55 ink=0.05 digits=2 gate=True sh=30 widths=[8, 16] heights=[30, 31] baselines=[44, 45] sbase=45
+  chroma  f=0.42 ink=0.13 digits=2 gate=True sh=34 widths=[12, 24] heights=[32, 34] baselines=[45, 46] sbase=46
+  chroma  f=0.33 ink=0.15 digits=2 gate=True sh=36 widths=[12, 25] heights=[34, 34] baselines=[46, 46] sbase=47
+  chroma  f=0.55 ink=0.10 digits=2 gate=True sh=33 widths=[10, 22] heights=[32, 32] baselines=[45, 45] sbase=46
+  bright  f=0.42 ink=0.12 digits=2 gate=False sh=46 widths=[9, 24] heights=[31, 33] baselines=[45, 46] sbase=46
+  bright  f=0.33 ink=0.19 digits=2 gate=False sh=46 widths=[8, 10] heights=[31, 32] baselines=[31, 45] sbase=46
+  bright  f=0.55 ink=0.07 digits=2 gate=False sh=45 widths=[7, 22] heights=[29, 32] baselines=[44, 45] sbase=45
+  dark    f=0.42 ink=0.12 digits=1 gate=True sh=34 widths=[27] heights=[39] baselines=[46] sbase=46
+  dark    f=0.33 ink=0.18 digits=0 gate=False 
+  dark    f=0.55 ink=0.07 digits=0 gate=False 
+--- dark_grenade_023_08s.png label=8
+  warm    f=0.42 ink=0.11 digits=1 gate=True sh=33 widths=[23] heights=[32] baselines=[45] sbase=46
+  warm    f=0.33 ink=0.13 digits=1 gate=True sh=34 widths=[23] heights=[33] baselines=[46] sbase=46
+  warm    f=0.55 ink=0.09 digits=1 gate=True sh=31 widths=[22] heights=[32] baselines=[45] sbase=45
+  chroma  f=0.42 ink=0.15 digits=0 gate=False 
+  chroma  f=0.33 ink=0.18 digits=0 gate=False 
+  chroma  f=0.55 ink=0.12 digits=1 gate=True sh=34 widths=[23] heights=[32] baselines=[45] sbase=46
+  bright  f=0.42 ink=0.14 digits=1 gate=True sh=33 widths=[24] heights=[32] baselines=[45] sbase=45
+  bright  f=0.33 ink=0.20 digits=1 gate=True sh=35 widths=[25] heights=[34] baselines=[46] sbase=46
+  bright  f=0.55 ink=0.08 digits=1 gate=True sh=30 widths=[22] heights=[32] baselines=[45] sbase=44
+  dark    f=0.42 ink=0.15 digits=1 gate=True sh=35 widths=[12] heights=[41] baselines=[41] sbase=45
+  dark    f=0.33 ink=0.22 digits=0 gate=False 
+  dark    f=0.55 ink=0.08 digits=0 gate=False 
