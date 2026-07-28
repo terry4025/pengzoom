@@ -35,7 +35,7 @@ from capture_overlay import CaptureOverlay
 
 # 앱 버전. 창 제목/브랜드 배지/AppUserModelID/빌드 산출물 이름이 모두 이 값을
 # 따른다. 이전에는 문자열이 흩어져 있어 한쪽만 올라가는 일이 있었다.
-APP_VERSION = "2.47"
+APP_VERSION = "2.48"
 APP_NAME = "펭구 줌인"
 
 # Set explicit AppUserModelID on Windows to fix Taskbar Icon grouping and display issues
