@@ -1,0 +1,15 @@
+{
+  "profile_id": "dark_grenade",
+  "version": 1,
+  "text_height": 8,
+  "labels": [
+    9
+  ],
+  "glyphs": [
+    "iVBORw0KGgoAAAANSUhEUgAAAAwAAAAQCAAAAAAHCsHbAAAAOklEQVQIHU3BwRGAMAAEIbb/ok8n+gjkEuZImCNhYhQmRhlilCFGGWIU5lOYT/mNcgzJMSTMK+SSywNd4xIRLohJtAAAAABJRU5ErkJggg=="
+  ],
+  "suffix_glyphs": [
+    "iVBORw0KGgoAAAANSUhEUgAAAAwAAAAQCAAAAAAHCsHbAAAAN0lEQVQIHU3BgWkEQRAEMVX+Qbf3MA8j5ciRI0c+kyfmX/KZPHmGECMjsUyWfCZP5qccOXLk+ANfzgsR/+rHqgAAAABJRU5ErkJggg=="
+  ],
+  "source": "bootstrap:orca-paste-1785174605304-dbc40ce6-72fe-409d-8e95-a77ed0e69122.png"
+}

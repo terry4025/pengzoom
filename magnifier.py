@@ -27,6 +27,8 @@ import cv2
 # Import our custom modules
 import cooldown_detector
 import network_manager
+import boss_debuff_detector
+from boss_debuff_panel import BossDebuffBanner, party_state_key
 from capture_overlay import CaptureOverlay
 
 # Set explicit AppUserModelID on Windows to fix Taskbar Icon grouping and display issues
@@ -694,6 +696,13 @@ class PartyPanel(QWidget):
         self.container_layout.setContentsMargins(14, 14, 14, 14)
         self.container_layout.setSpacing(10)
         
+        # Boss debuff readout (암흑 수류탄) sits above the player cards
+        self._boss_local_enabled = False
+        self.boss_banner = BossDebuffBanner(ui_scale=self.ui_scale)
+        self.boss_banner.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.boss_banner.setVisible(False)
+        self.container_layout.addWidget(self.boss_banner)
+        
         self.list_layout = QVBoxLayout()
         self.list_layout.setSpacing(8)
         self.container_layout.addLayout(self.list_layout)
@@ -752,12 +761,37 @@ class PartyPanel(QWidget):
         self.container.setStyleSheet(self.container_style_normal)
         theme = THEMES[self.theme_name]
         
+        if hasattr(self, "boss_banner"):
+            self.boss_banner.apply_scale(self.ui_scale)
+            self.boss_banner.apply_theme(theme)
+        
         for player, p_info in self.widgets.items():
             for skill, s_widgets in p_info["skill_widgets"].items():
                 s_widgets["glow"].setColor(theme['ready'])
                 s_widgets["glow"].speed = self.speed
                 s_widgets["glow"].intensity = self.intensity
                 s_widgets["progress"].setColor(theme['cooldown'])
+
+    # -- boss debuff (암흑 수류탄) -------------------------------------------
+    def set_boss_debuff_enabled(self, enabled):
+        """Local detection toggle; party reports can still show the banner."""
+        self._boss_local_enabled = bool(enabled)
+        if not enabled and hasattr(self, "boss_banner"):
+            self.boss_banner.clear_local()
+        self.sync_boss_banner_visibility()
+
+    def sync_boss_banner_visibility(self):
+        if not hasattr(self, "boss_banner"):
+            return
+        visible = getattr(self, "_boss_local_enabled", False) or self.boss_banner.has_reports()
+        if self.boss_banner.isVisible() != visible:
+            self.boss_banner.setVisible(visible)
+            self.adjustSize()
+
+    def update_boss_debuff(self, state):
+        if hasattr(self, "boss_banner"):
+            self.boss_banner.set_local_state(state or {})
+            self.sync_boss_banner_visibility()
                 
     def rebuild_cards(self):
         for i in reversed(range(self.list_layout.count())):
@@ -772,6 +806,13 @@ class PartyPanel(QWidget):
     def update_states(self, party_states):
         received_at = time.time()
         current_players = set(party_states.keys())
+        
+        # Boss debuff reports ride along the party channel under a '_' prefixed
+        # key, so the skill-badge loop below skips them automatically.
+        if hasattr(self, "boss_banner"):
+            local_name = getattr(self.parent_window, "player_name", "") if self.parent_window else ""
+            self.boss_banner.ingest_party_states(party_states, exclude_player=local_name)
+            self.sync_boss_banner_visibility()
         
         # Remove old players
         for p in list(self.widgets.keys()):
@@ -1005,6 +1046,9 @@ class PartyPanel(QWidget):
     def tick_timers(self):
         current_time = time.time()
         theme = THEMES[self.theme_name]
+        
+        if hasattr(self, "boss_banner") and self.boss_banner.isVisible():
+            self.boss_banner.tick()
         
         for player, p_data in list(self.widgets.items()):
             for skill, s_widgets in list(p_data["skill_widgets"].items()):
@@ -1659,6 +1703,11 @@ class SettingsModal(QDialog):
         self.setup_network_tab(tab_network)
         self.tabs.addTab(tab_network, "파티 연동")
         
+        # Tab 4: Boss debuff (암흑 수류탄) detection
+        tab_boss = QWidget()
+        self.setup_boss_debuff_tab(tab_boss)
+        self.tabs.addTab(tab_boss, "보스 디버프")
+        
         container_layout.addWidget(self.tabs)
         
         # Bottom Actions
@@ -2195,6 +2244,285 @@ class SettingsModal(QDialog):
         except Exception:
             label.setPixmap(QPixmap())
             label.setText("미리보기 실패")
+
+    # ------------------------------------------------------------------
+    # Boss debuff (암흑 수류탄) tab
+    # ------------------------------------------------------------------
+    def setup_boss_debuff_tab(self, tab):
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(10)
+
+        guide = QLabel(
+            "보스 체력바 아래 <b>디버프 칸 줄</b>만 감지 영역으로 잡아 주세요. "
+            "칸은 디버프가 늘거나 줄 때 좌우로 움직이므로, 한 칸이 아니라 줄 전체를 넉넉히 지정합니다. "
+            "우측 하단 배틀 아이템 칸의 같은 아이콘을 잡지 않으려면 이 영역 밖으로 두는 것이 중요합니다."
+        )
+        guide.setWordWrap(True)
+        guide.setStyleSheet("color: #a9cfff; font-size: 11px;")
+        lay.addWidget(guide)
+
+        self.boss_enable_check = QCheckBox("암흑 수류탄 디버프 감지 사용")
+        self.boss_enable_check.toggled.connect(self.on_boss_controls_changed)
+        lay.addWidget(self.boss_enable_check)
+
+        region_row = QHBoxLayout()
+        self.boss_region_label = QLabel("영역 미지정")
+        self.boss_region_label.setStyleSheet("font-size: 11px; color: #cccccc;")
+        region_row.addWidget(self.boss_region_label, 1)
+        self.boss_select_region_btn = QPushButton("영역 지정")
+        self.boss_select_region_btn.clicked.connect(self.select_boss_debuff_region)
+        region_row.addWidget(self.boss_select_region_btn)
+        self.boss_auto_region_btn = QPushButton("자동 추정")
+        self.boss_auto_region_btn.clicked.connect(self.auto_boss_debuff_region)
+        region_row.addWidget(self.boss_auto_region_btn)
+        lay.addLayout(region_row)
+
+        tune_row = QHBoxLayout()
+        tune_row.addWidget(QLabel("아이콘 일치율:"))
+        self.boss_threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.boss_threshold_slider.setRange(60, 95)
+        self.boss_threshold_slider.setValue(int(boss_debuff_detector.DEFAULT_MATCH_THRESHOLD * 100))
+        self.boss_threshold_slider.valueChanged.connect(self.on_boss_controls_changed)
+        tune_row.addWidget(self.boss_threshold_slider, 2)
+        self.boss_threshold_value = QLabel("0.80")
+        self.boss_threshold_value.setStyleSheet("font-size: 11px; color: #ffd60a;")
+        tune_row.addWidget(self.boss_threshold_value)
+        tune_row.addWidget(QLabel("지속시간:"))
+        self.boss_duration_spin = QDoubleSpinBox()
+        self.boss_duration_spin.setRange(0.0, 120.0)
+        self.boss_duration_spin.setDecimals(1)
+        self.boss_duration_spin.setSingleStep(0.5)
+        self.boss_duration_spin.setSuffix(" 초 (0=자동)")
+        self.boss_duration_spin.valueChanged.connect(self.on_boss_controls_changed)
+        tune_row.addWidget(self.boss_duration_spin)
+        lay.addLayout(tune_row)
+
+        self.boss_share_check = QCheckBox("파티원에게 보스 디버프 상태 공유")
+        self.boss_share_check.toggled.connect(self.on_boss_controls_changed)
+        lay.addWidget(self.boss_share_check)
+
+        preview_frame = QFrame()
+        preview_frame.setStyleSheet(
+            "QFrame { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.10); "
+            "border-radius: 8px; } QLabel { border: none; background: transparent; }"
+        )
+        preview_lay = QVBoxLayout(preview_frame)
+        preview_lay.setContentsMargins(6, 6, 6, 6)
+        preview_lay.setSpacing(4)
+        preview_title = QLabel("감지 영역 미리보기 (초록=감지됨, 파랑=후보, 노랑=남은시간 숫자 영역)")
+        preview_title.setStyleSheet("font-size: 10px; color: #aaaaaa;")
+        preview_lay.addWidget(preview_title)
+        self.boss_preview_label = QLabel("대기 중")
+        self.boss_preview_label.setMinimumSize(540, 96)
+        self.boss_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.boss_preview_label.setStyleSheet("background: #050505; color: #555555; border-radius: 5px;")
+        preview_lay.addWidget(self.boss_preview_label)
+        lay.addWidget(preview_frame)
+
+        self.boss_status_label = QLabel("영역을 지정하면 상태가 표시됩니다.")
+        self.boss_status_label.setWordWrap(True)
+        self.boss_status_label.setStyleSheet("font-size: 11px; color: #ffd60a;")
+        lay.addWidget(self.boss_status_label)
+
+        sample_box = QFrame()
+        sample_box.setStyleSheet(
+            "QFrame { background: rgba(10,132,255,0.06); border: 1px solid rgba(10,132,255,0.20); "
+            "border-radius: 9px; } QLabel { border: none; background: transparent; }"
+        )
+        sample_lay = QVBoxLayout(sample_box)
+        sample_lay.setContentsMargins(10, 8, 10, 8)
+        sample_lay.setSpacing(6)
+        sample_guide = QLabel(
+            "남은 초 숫자는 8px 정도로 매우 작아 표본 없이는 값을 표시하지 않습니다. "
+            "샘플 수집을 켜고 암흑 수류탄을 한 번 쓰면, 2자리→1자리로 바뀌는 순간(=9초)을 기준으로 "
+            "이전 프레임까지 소급 라벨링되어 0~9 숫자 표본이 한 번에 모입니다."
+        )
+        sample_guide.setWordWrap(True)
+        sample_guide.setStyleSheet("color: #a9cfff; font-size: 11px;")
+        sample_lay.addWidget(sample_guide)
+        sample_row = QHBoxLayout()
+        self.boss_collect_check = QCheckBox("숫자 샘플 수집")
+        self.boss_collect_check.toggled.connect(self.on_boss_controls_changed)
+        sample_row.addWidget(self.boss_collect_check)
+        self.boss_open_samples_btn = QPushButton("샘플 폴더 열기")
+        self.boss_open_samples_btn.clicked.connect(self.open_boss_sample_folder)
+        sample_row.addWidget(self.boss_open_samples_btn)
+        self.boss_train_btn = QPushButton("샘플로 숫자 학습")
+        self.boss_train_btn.clicked.connect(self.train_boss_debuff_profile)
+        sample_row.addWidget(self.boss_train_btn)
+        sample_lay.addLayout(sample_row)
+        self.boss_train_status = QLabel("")
+        self.boss_train_status.setWordWrap(True)
+        self.boss_train_status.setStyleSheet("font-size: 11px; color: #cccccc;")
+        sample_lay.addWidget(self.boss_train_status)
+        lay.addWidget(sample_box)
+        lay.addStretch()
+
+        self._boss_sct = None
+        self.refresh_boss_debuff_ui()
+        self.boss_preview_timer = QTimer(self)
+        self.boss_preview_timer.timeout.connect(self.refresh_boss_debuff_preview)
+        self.boss_preview_timer.start(300)
+        self.finished.connect(self._stop_boss_preview)
+
+    def _boss_config(self):
+        window = self.parent_window
+        config = getattr(window, 'boss_debuff_config', None)
+        if not isinstance(config, dict):
+            config = window.default_boss_debuff_config()
+            window.boss_debuff_config = config
+        return config
+
+    def refresh_boss_debuff_ui(self):
+        config = self._boss_config()
+        for widget in (self.boss_enable_check, self.boss_threshold_slider,
+                       self.boss_duration_spin, self.boss_share_check, self.boss_collect_check):
+            widget.blockSignals(True)
+        self.boss_enable_check.setChecked(bool(config.get('enabled')))
+        self.boss_threshold_slider.setValue(int(round(float(config.get('threshold', 0.8)) * 100)))
+        self.boss_duration_spin.setValue(float(config.get('duration', 0.0) or 0.0))
+        self.boss_share_check.setChecked(bool(config.get('share_with_party', True)))
+        self.boss_collect_check.setChecked(bool(config.get('collect_samples')))
+        for widget in (self.boss_enable_check, self.boss_threshold_slider,
+                       self.boss_duration_spin, self.boss_share_check, self.boss_collect_check):
+            widget.blockSignals(False)
+        self.boss_threshold_value.setText(f"{self.boss_threshold_slider.value() / 100.0:.2f}")
+        region = config.get('region')
+        if region:
+            self.boss_region_label.setText(
+                f"영역: X {region[0]} · Y {region[1]} · {region[2]}×{region[3]}"
+            )
+        else:
+            self.boss_region_label.setText("영역 미지정")
+        detector = self.parent_window.boss_debuff_detector
+        digits = detector.profile.digit_coverage
+        if detector.profile.trusted:
+            self.boss_train_status.setText(f"숫자 인식 사용 가능 · 학습된 숫자 {digits}")
+        else:
+            missing = [d for d in range(10) if d not in digits]
+            self.boss_train_status.setText(
+                f"숫자 표본 부족 (학습됨 {digits} / 없음 {missing}) · 지금은 지속시간 기반 추정만 사용합니다."
+            )
+
+    def on_boss_controls_changed(self, *_args):
+        config = self._boss_config()
+        config['enabled'] = self.boss_enable_check.isChecked()
+        config['threshold'] = self.boss_threshold_slider.value() / 100.0
+        config['duration'] = float(self.boss_duration_spin.value())
+        config['share_with_party'] = self.boss_share_check.isChecked()
+        config['collect_samples'] = self.boss_collect_check.isChecked()
+        self.boss_threshold_value.setText(f"{config['threshold']:.2f}")
+        self.parent_window.apply_boss_debuff_settings()
+        self.parent_window.save_settings()
+
+    def select_boss_debuff_region(self):
+        self.hide()
+        self.parent_window.start_boss_debuff_region_capture(self)
+
+    def auto_boss_debuff_region(self):
+        region = self.parent_window.auto_estimate_boss_debuff_region()
+        self.refresh_boss_debuff_ui()
+        self.boss_status_label.setText(
+            f"기본 위치로 추정했습니다: {region}. 인게임 화면과 맞지 않으면 '영역 지정'으로 직접 잡아 주세요."
+        )
+
+    def open_boss_sample_folder(self):
+        path = self.parent_window.boss_debuff_detector.sample_root
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(path))
+        except Exception as exc:
+            self.boss_train_status.setText(f"폴더를 열 수 없습니다: {exc}")
+
+    def train_boss_debuff_profile(self):
+        detector = self.parent_window.boss_debuff_detector
+        paths = sorted(detector.sample_root.glob("*.png")) if detector.sample_root.exists() else []
+        if not paths:
+            self.boss_train_status.setText("학습할 샘플이 없습니다. 샘플 수집을 켠 상태로 암흑 수류탄을 사용해 주세요.")
+            return
+        try:
+            result = boss_debuff_detector.train_timer_profile(paths, detector.debuff_id)
+        except Exception as exc:
+            self.boss_train_status.setText(f"학습 실패: {exc}")
+            return
+        detector.reload_assets()
+        self.refresh_boss_debuff_ui()
+        summary = (
+            f"이미지 {result['used_images']}장 사용 · 글리프 {result['added_glyphs']}개 추가 · "
+            f"학습된 숫자 {result['digits']}"
+        )
+        if not result["trusted"]:
+            summary += f" · 아직 부족한 숫자 {result['missing_digits']}"
+        self.boss_train_status.setText(summary)
+
+    def on_boss_debuff_state(self, state):
+        if not isinstance(state, dict) or not state:
+            return
+        if state.get("active"):
+            remaining = state.get("remaining")
+            source = {
+                "ocr": "숫자 인식", "anchor": "자릿수 보정",
+                "duration": "지속시간 추정", "unknown": "시간 미확인",
+            }.get(state.get("source", ""), state.get("source", ""))
+            value = "?" if remaining is None else f"{math.ceil(float(remaining))}초"
+            self.boss_status_label.setText(
+                f"감지됨 · 남은 시간 {value} ({source}) · 일치율 {state.get('score', 0):.2f} · "
+                f"학습된 지속시간 {state.get('learned_duration', 0)}초"
+            )
+        else:
+            self.boss_status_label.setText(
+                f"디버프 없음 · 최근 일치율 {state.get('score', 0):.2f}"
+            )
+
+    def refresh_boss_debuff_preview(self):
+        if not self.isVisible():
+            return
+        detector = self.parent_window.boss_debuff_detector
+        region = self._boss_config().get('region')
+        if not region:
+            self._set_ocr_preview_image(self.boss_preview_label, None)
+            return
+        try:
+            if self._boss_sct is None:
+                self._boss_sct = mss.mss()
+            band = detector.grab_band(self._boss_sct)
+        except Exception as exc:
+            self.boss_status_label.setText(f"화면 캡처 실패: {exc}")
+            return
+        if band is None:
+            return
+
+        if detector.enabled and detector.isRunning():
+            state = detector.status()
+            self.on_boss_debuff_state(state)
+        else:
+            # Stateless probe so the region can be aimed before enabling.
+            gray = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
+            match = boss_debuff_detector.match_icon(
+                gray, detector.templates, detector.min_icon_px, detector.max_icon_px
+            )
+            state = {}
+            if match is not None:
+                state = {
+                    "cell": [match.x, match.y, match.size, match.size],
+                    "active": match.score >= detector.match_threshold,
+                    "score": match.score,
+                }
+                self.boss_status_label.setText(
+                    f"미리보기(감지 꺼짐) · 최고 일치율 {match.score:.2f} · 아이콘 크기 {match.size}px"
+                )
+        self._set_ocr_preview_image(self.boss_preview_label, detector.render_preview(band, state))
+
+    def _stop_boss_preview(self, *_args):
+        if hasattr(self, "boss_preview_timer"):
+            self.boss_preview_timer.stop()
+        if getattr(self, "_boss_sct", None) is not None:
+            try:
+                self._boss_sct.close()
+            except Exception:
+                pass
+            self._boss_sct = None
 
     def setup_network_tab(self, tab):
         lay = QVBoxLayout(tab)
@@ -3079,6 +3407,15 @@ class MagnifierWindow(QMainWindow):
         self.detector.state_changed.connect(self.on_skill_state_changed)
         self.detector.start_detection(50)  # Scan every 50ms (runs inside background QThread)
         
+        # Boss debuff (암흑 수류탄) detector — scans the strip under the boss HP bar
+        self.boss_debuff_detector = boss_debuff_detector.BossDebuffDetector(debuff_id=boss_debuff_detector.DEFAULT_DEBUFF_ID)
+        self.boss_debuff_detector.device_ratio = QApplication.primaryScreen().devicePixelRatio()
+        self.boss_debuff_detector.debuff_updated.connect(
+            self.on_boss_debuff_updated, Qt.ConnectionType.QueuedConnection
+        )
+        self.boss_debuff_state = {}
+        self.boss_debuff_last_sent = (None, None, 0.0)
+        
         # Network objects
         self.server = None
         self.client = None
@@ -3091,6 +3428,7 @@ class MagnifierWindow(QMainWindow):
         self.party_panel = PartyPanel(self)
         
         self.load_settings()
+        self.apply_boss_debuff_settings()
         self.character_profile_lookup = network_manager.CharacterProfileLookup(self)
         self.character_profile_lookup.profile_loaded.connect(
             self.on_character_profile_loaded, Qt.ConnectionType.QueuedConnection
@@ -3214,6 +3552,7 @@ class MagnifierWindow(QMainWindow):
         self.player_class = "홀리나이트"
         self.developer_capture_mode = False
         self.detector.developer_capture_enabled = False
+        self.boss_debuff_config = self.default_boss_debuff_config()
         
         if os.path.exists(config_path):
             try:
@@ -3241,6 +3580,20 @@ class MagnifierWindow(QMainWindow):
                     # Ignore legacy flags so old configs migrate to manual mode.
                     self.developer_capture_mode = False
                     self.detector.developer_capture_enabled = False
+                    
+                    # Boss debuff (암흑 수류탄) detection settings
+                    stored_boss = data.get('boss_debuff', {})
+                    config = self.default_boss_debuff_config()
+                    if isinstance(stored_boss, dict):
+                        for key, value in stored_boss.items():
+                            if key in config:
+                                config[key] = value
+                    region = config.get('region')
+                    if not (isinstance(region, (list, tuple)) and len(region) == 4):
+                        config['region'] = None
+                    else:
+                        config['region'] = [int(v) for v in region]
+                    self.boss_debuff_config = config
                     
                     # Restore party panel position and size
                     party_pos = data.get('party_panel_pos', None)
@@ -3446,7 +3799,8 @@ class MagnifierWindow(QMainWindow):
                 'party_ui_scale': party_scale,
                 'party_speed': party_speed,
                 'party_intensity': party_intensity,
-                'party_player_classes': party_classes
+                'party_player_classes': party_classes,
+                'boss_debuff': getattr(self, 'boss_debuff_config', None) or self.default_boss_debuff_config()
             }
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
@@ -3792,6 +4146,130 @@ class MagnifierWindow(QMainWindow):
             for name, slot in self.detector.slots.items():
                 duration = self.detector.get_remaining_seconds(name) if not slot.is_ready else 0
                 self.client.send_update(name, slot.is_ready, duration)
+        self.broadcast_boss_debuff(force=True)
+
+    # ------------------------------------------------------------------
+    # Boss debuff (암흑 수류탄) detection
+    # ------------------------------------------------------------------
+    @staticmethod
+    def default_boss_debuff_config():
+        return {
+            'enabled': False,
+            'region': None,
+            'threshold': boss_debuff_detector.DEFAULT_MATCH_THRESHOLD,
+            'duration': 0.0,          # 0 = learn the total duration automatically
+            'learned_duration': 0.0,  # auto-learned total, kept across restarts
+            'min_icon_px': boss_debuff_detector.DEFAULT_MIN_ICON_PX,
+            'max_icon_px': boss_debuff_detector.DEFAULT_MAX_ICON_PX,
+            'collect_samples': False,
+            'share_with_party': True,
+        }
+
+    def apply_boss_debuff_settings(self):
+        """Push the stored config into the detector and start/stop its thread."""
+        config = getattr(self, 'boss_debuff_config', None) or self.default_boss_debuff_config()
+        self.boss_debuff_config = config
+        region = config.get('region')
+        ratio = QApplication.primaryScreen().devicePixelRatio()
+        if region:
+            screen = QApplication.screenAt(QPoint(int(region[0] + region[2] // 2),
+                                                  int(region[1] + region[3] // 2)))
+            if screen:
+                ratio = screen.devicePixelRatio()
+        self.boss_debuff_detector.configure(
+            enabled=bool(config.get('enabled')) and bool(region),
+            region=region,
+            device_ratio=ratio,
+            match_threshold=config.get('threshold'),
+            duration=config.get('duration'),
+            learned_duration=config.get('learned_duration'),
+            min_icon_px=config.get('min_icon_px'),
+            max_icon_px=config.get('max_icon_px'),
+            collect_samples=config.get('collect_samples'),
+        )
+        if self.party_panel:
+            self.party_panel.set_boss_debuff_enabled(self.boss_debuff_detector.enabled)
+        if self.boss_debuff_detector.enabled:
+            self.boss_debuff_detector.start_detection(100)
+        else:
+            self.boss_debuff_state = {}
+            if self.boss_debuff_detector.isRunning():
+                self.boss_debuff_detector.stop_detection()
+
+    def start_boss_debuff_region_capture(self, config_dialog):
+        """Drag-select the debuff strip band under the boss HP bar."""
+        self.config_dialog_ref = config_dialog
+        self.is_settings_open = True
+        self.hide()
+        self.boss_region_overlay = CaptureOverlay()
+        self.boss_region_overlay.capture_completed.connect(self.on_boss_debuff_region_captured)
+        self.boss_region_overlay.exec()
+        self.restore_settings_open_state()
+        dialog = getattr(self, 'config_dialog_ref', None)
+        if dialog and hasattr(dialog, 'refresh_boss_debuff_ui'):
+            dialog.refresh_boss_debuff_ui()
+
+    def on_boss_debuff_region_captured(self, x, y, w, h, captured_rgb):
+        # Only the rectangle is kept; the icon template ships with the app.
+        if w < 40 or h < 20:
+            return
+        config = getattr(self, 'boss_debuff_config', None) or self.default_boss_debuff_config()
+        config['region'] = [int(x), int(y), int(w), int(h)]
+        self.boss_debuff_config = config
+        self.apply_boss_debuff_settings()
+        self.save_settings()
+
+    def auto_estimate_boss_debuff_region(self):
+        screen = QApplication.primaryScreen()
+        geometry = screen.geometry()
+        region = self.boss_debuff_detector.auto_region_for_screen(geometry.width(), geometry.height())
+        region[0] += geometry.x()
+        region[1] += geometry.y()
+        config = getattr(self, 'boss_debuff_config', None) or self.default_boss_debuff_config()
+        config['region'] = region
+        self.boss_debuff_config = config
+        self.apply_boss_debuff_settings()
+        self.save_settings()
+        return region
+
+    def on_boss_debuff_updated(self, debuff_id, state):
+        self.boss_debuff_state = state or {}
+        if self.party_panel:
+            self.party_panel.update_boss_debuff(self.boss_debuff_state)
+        self.broadcast_boss_debuff()
+        
+        # Persist a newly learned total duration so the next session starts with it.
+        config = getattr(self, 'boss_debuff_config', None)
+        learned = float(self.boss_debuff_state.get('learned_duration', 0) or 0)
+        if isinstance(config, dict) and learned > float(config.get('learned_duration', 0) or 0) + 0.05:
+            config['learned_duration'] = round(learned, 1)
+            self.save_settings()
+        
+        dialog = getattr(self, 'config_dialog_ref', None)
+        if dialog and dialog.isVisible() and hasattr(dialog, 'on_boss_debuff_state'):
+            dialog.on_boss_debuff_state(self.boss_debuff_state)
+
+    def broadcast_boss_debuff(self, force=False):
+        """Share the boss debuff with the party over the existing skill channel."""
+        config = getattr(self, 'boss_debuff_config', None) or {}
+        if not config.get('share_with_party', True):
+            return
+        if not (self.client_running and self.client):
+            return
+        state = getattr(self, 'boss_debuff_state', None) or {}
+        if not state:
+            return
+        active = bool(state.get('active'))
+        remaining = state.get('remaining')
+        seconds = 0 if remaining is None else max(0, int(math.ceil(float(remaining))))
+        previous_active, previous_seconds, previous_at = getattr(
+            self, 'boss_debuff_last_sent', (None, None, 0.0)
+        )
+        now = time.time()
+        if not force and previous_active == active and previous_seconds == seconds and now - previous_at < 1.0:
+            return
+        self.boss_debuff_last_sent = (active, seconds, now)
+        self.client.send_update(party_state_key(self.boss_debuff_detector.debuff_id), active, seconds)
 
     # Server hosting control (uses show_dark_message_box for gorgeous contrast popup)
     def start_party_server(self):
@@ -4298,6 +4776,10 @@ class MagnifierWindow(QMainWindow):
     def closeEvent(self, event):
         self.save_settings()
         self.detector.stop_detection()
+        try:
+            self.boss_debuff_detector.stop_detection()
+        except Exception:
+            pass
         self.stop_party_server()
         self.stop_party_client()
         self.party_panel.close()
