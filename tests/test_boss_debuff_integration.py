@@ -268,8 +268,10 @@ class BossDebuffWiringTests(unittest.TestCase):
 
         banner = self.window.party_panel.boss_banner
         self.assertBannerShown(banner)
-        self.assertEqual(banner.value_label.text(), "10초")
-        self.assertIn("추정", banner.detail_label.text())
+        # 이 밴드에는 '9초' 가 찍혀 있다. 상관 정합 경로가 붙은 뒤로는 지속시간
+        # 추정(10초) 대신 실제로 읽은 값이 배너에 올라간다.
+        self.assertEqual(banner.value_label.text(), "9초")
+        self.assertIn("OCR", banner.detail_label.text())
 
 
 class BannerThemeContrastTests(unittest.TestCase):

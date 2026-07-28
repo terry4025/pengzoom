@@ -50,7 +50,7 @@ except Exception:  # pragma: no cover - only hit on a broken install
         return None
 
 
-PROFILE_VERSION = 2  # v2: 4x upscaled warm-channel glyphs (v1 shapes are incompatible)
+PROFILE_VERSION = 3  # v3: adds appearance patches for correlation reading (v2 lacks them)
 DEFAULT_DEBUFF_ID = "dark_grenade"
 DEBUFF_DISPLAY_NAMES = {DEFAULT_DEBUFF_ID: "암흑 수류탄"}
 
@@ -101,6 +101,20 @@ MIN_OCR_CONFIDENCE = 0.70
 MIN_SUFFIX_SIMILARITY = 0.45   # '초' 글리프 모양 확인 하한
 MIN_TRAINED_DIGITS = 8     # digits 0-9 coverage required before OCR is trusted
 MIN_TRAINED_ACCURACY = 0.90  # leave-one-out accuracy required before OCR is trusted
+
+# --- 상관 정합(NCC) 경로 ---------------------------------------------------
+# 이진화 -> 덩어리 분리 -> 분류 대신, 학습된 숫자 모양을 회색 점수 이미지에
+# 정규화 상관으로 직접 맞춘다. 정규화 상관은 밝기·대비 변화에 불변이라 배경이
+# 글자와 같은 색조로 물들어도(용암·석양) 분리 실패로 무너지지 않는다.
+NCC_HEIGHT_RATIOS = (0.42, 0.50, 0.58)   # * ROI 높이. 8px 텍스트 = ROI의 약 0.5
+NCC_MIN_SUFFIX = 0.50      # '초' 정합 하한. 이보다 낮으면 타이머 줄이 아니다
+NCC_MIN_DIGIT = 0.60       # 숫자 정합 하한. 실측 정답 위치는 0.90 을 넘는다
+NCC_MAX_DIGITS = 2         # 표시되는 남은 초는 두 자리를 넘지 않는다
+# 외형 템플릿은 실측 점수 이미지에서 그대로 잘라 보관한다. 정규화된 12x16 이진
+# 캔버스를 되키운 템플릿은 획 모양이 어긋나 '초' 정합이 0.60 에 머물렀고, 그
+# 어긋난 위치가 '14초' 를 '1초' 로 읽는 원인이었다. 실측 외형은 0.95 를 넘는다.
+PATCH_HEIGHT = 32          # 글자(잉크) 높이 기준 정규화 높이
+PATCH_MARGIN = 0.18        # * 글자 높이. 템플릿에 함께 담는 실제 배경 여백
 
 SAMPLE_MIN_INTERVAL = 0.4  # two crops per displayed second is plenty
 SAMPLE_BUFFER_FRAMES = 240  # ~96s of a single cast at the interval above
@@ -427,12 +441,17 @@ class TimerGlyphProfile:
     labels: list[int] = field(default_factory=list)
     glyphs: list[str] = field(default_factory=list)
     suffix_glyphs: list[str] = field(default_factory=list)
+    patch_labels: list[int] = field(default_factory=list)
+    patch_modes: list[str] = field(default_factory=list)
+    patches: list[str] = field(default_factory=list)
     accuracy: float = 0.0
     source: str = "bootstrap"
     _features: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
     _labels_np: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
     _suffix_features: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
     _loo: Optional[float] = field(default=None, repr=False, compare=False)
+    _stencils: Optional[tuple] = field(default=None, repr=False, compare=False)
+    _patch_stencils: Optional[tuple] = field(default=None, repr=False, compare=False)
 
     # -- persistence --------------------------------------------------------
     def to_dict(self) -> dict:
@@ -443,6 +462,9 @@ class TimerGlyphProfile:
             "labels": self.labels,
             "glyphs": self.glyphs,
             "suffix_glyphs": self.suffix_glyphs,
+            "patch_labels": self.patch_labels,
+            "patch_modes": self.patch_modes,
+            "patches": self.patches,
             "accuracy": round(float(self.accuracy), 4),
             "source": self.source,
         }
@@ -456,6 +478,9 @@ class TimerGlyphProfile:
             labels=[int(v) for v in data.get("labels", [])],
             glyphs=[str(v) for v in data.get("glyphs", [])],
             suffix_glyphs=[str(v) for v in data.get("suffix_glyphs", [])],
+            patch_labels=[int(v) for v in data.get("patch_labels", [])],
+            patch_modes=[str(v) for v in data.get("patch_modes", [])],
+            patches=[str(v) for v in data.get("patches", [])],
             accuracy=float(data.get("accuracy", 0.0) or 0.0),
             source=str(data.get("source", "bootstrap")),
         )
@@ -507,6 +532,7 @@ class TimerGlyphProfile:
         self.glyphs.append(encoded)
         self._features = None
         self._loo = None
+        self._stencils = None
         return True
 
     def add_suffix(self, glyph: np.ndarray) -> bool:
@@ -515,7 +541,133 @@ class TimerGlyphProfile:
             return False
         self.suffix_glyphs.append(encoded)
         self._suffix_features = None
+        self._stencils = None
         return True
+
+    def stencils(self) -> tuple[dict, Optional[np.ndarray]]:
+        """숫자별 평균 글리프와 '초' 평균 글리프 (정규화 캔버스 기준).
+
+        여러 프레임·여러 채널에서 잘라낸 같은 숫자를 평균하면 획 두께와
+        안티에일리어싱이 자연히 섞여, 한 장에서 뜬 템플릿보다 안정적이다.
+        """
+        if self._stencils is not None:
+            return self._stencils
+        collected: dict[int, list] = {}
+        for label, encoded in zip(self.labels, self.glyphs):
+            glyph = decode_png(encoded)
+            if glyph is None or glyph.shape[:2] != (GLYPH_SIZE[1], GLYPH_SIZE[0]):
+                continue
+            collected.setdefault(int(label), []).append(glyph.astype(np.float32))
+        digits = {digit: np.mean(frames, axis=0)
+                  for digit, frames in collected.items() if frames}
+        suffix_frames = []
+        for encoded in self.suffix_glyphs:
+            glyph = decode_png(encoded)
+            if glyph is not None and glyph.shape[:2] == (GLYPH_SIZE[1], GLYPH_SIZE[0]):
+                suffix_frames.append(glyph.astype(np.float32))
+        suffix = np.mean(suffix_frames, axis=0) if suffix_frames else None
+        self._stencils = (digits, suffix)
+        return self._stencils
+
+    def add_patch(self, digit: Optional[int], patch: np.ndarray,
+                  mode: str = "warm") -> bool:
+        """Store an appearance template cut straight out of a score image.
+
+        ``digit`` is ``None`` for the ``초`` suffix.  These are what the
+        correlation reader matches with: a glyph rebuilt from the normalized
+        12x16 canvas has the wrong stroke shape, and the resulting ``초``
+        template only correlated at 0.60, which put the suffix in the wrong
+        place and turned ``14초`` into ``1초``.
+
+        Patches are kept per colour channel: a stroke cut out of a luminance
+        top-hat is thicker than the same stroke cut out of the warm channel, and
+        averaging the two together blurs both.
+        """
+        if patch is None or patch.size == 0:
+            return False
+        encoded = encode_png(patch)
+        if not encoded:
+            return False
+        label = -1 if digit is None else int(digit)
+        if (label, str(mode), encoded) in set(zip(self.patch_labels, self.patch_modes,
+                                                 self.patches)):
+            return False
+        self.patch_labels.append(label)
+        self.patch_modes.append(str(mode))
+        self.patches.append(encoded)
+        self._patch_stencils = None
+        return True
+
+    @staticmethod
+    def _average(frames: list) -> Optional[np.ndarray]:
+        frames = [f for f in frames if f is not None and f.shape[0] > 4]
+        if not frames:
+            return None
+        width = max(3, int(np.median([f.shape[1] for f in frames])))
+        height = int(np.median([f.shape[0] for f in frames]))
+        resized = [cv2.resize(f.astype(np.float32), (width, height),
+                              interpolation=cv2.INTER_AREA) for f in frames]
+        return np.mean(resized, axis=0).astype(np.float32)
+
+    def compact_patches(self) -> int:
+        """Collapse the collected patches into one mean per (glyph, channel).
+
+        Only the mean is ever matched against, so keeping every crop would make
+        the profile grow without bound (502 digit crops from 57 frames was
+        already 1.2MB).
+        """
+        grouped: dict[tuple, list] = {}
+        for label, mode, encoded in zip(self.patch_labels, self.patch_modes, self.patches):
+            decoded = decode_png(encoded)
+            if decoded is not None:
+                grouped.setdefault((int(label), str(mode)), []).append(decoded)
+        self.patch_labels, self.patch_modes, self.patches = [], [], []
+        self._patch_stencils = None
+        for (label, mode), frames in sorted(grouped.items()):
+            mean = self._average(frames)
+            if mean is None:
+                continue
+            encoded = encode_png(np.clip(mean, 0, 255).astype(np.uint8))
+            if not encoded:
+                continue
+            self.patch_labels.append(int(label))
+            self.patch_modes.append(str(mode))
+            self.patches.append(encoded)
+        return len(self.patches)
+
+    def patch_stencils(self, mode: str = "warm") -> tuple[dict, Optional[np.ndarray]]:
+        """숫자별/접미사 평균 외형 템플릿. 잉크 높이는 :data:`PATCH_HEIGHT`.
+
+        요청한 채널의 템플릿이 없으면 가지고 있는 채널을 모두 평균해서 쓴다.
+        """
+        if self._patch_stencils is None:
+            self._patch_stencils = {}
+        cached = self._patch_stencils.get(mode)
+        if cached is not None:
+            return cached
+
+        collected: dict[int, list] = {}
+        for label, patch_mode, encoded in zip(self.patch_labels, self.patch_modes,
+                                              self.patches):
+            if mode and patch_mode != mode:
+                continue
+            decoded = decode_png(encoded)
+            if decoded is not None:
+                collected.setdefault(int(label), []).append(decoded.astype(np.float32))
+        if not collected and mode:
+            return self.patch_stencils("")      # 채널 구분 없이 다시 시도
+        digits = {}
+        for label, frames in collected.items():
+            mean = self._average(frames)
+            if mean is None:
+                continue
+            if label < 0:
+                continue
+            digits[label] = mean
+        suffix = self._average(collected.get(-1, []))
+        result = (digits, suffix)
+        self._patch_stencils[mode] = result
+        return result
 
     # -- inference ----------------------------------------------------------
     @property
@@ -792,9 +944,273 @@ def read_timer_value(roi_bgr: np.ndarray, profile: "TimerGlyphProfile",
         winner = ranked[0][1]
         winner.candidates = len(ranked)
         return winner
+    # 분리에 실패한 프레임은 상관 정합으로 한 번 더 본다. 배경이 글자와 같은
+    # 계열로 물든 보스방에서는 이 경로만 살아남는다.
+    correlated = read_timer_by_correlation(roi_bgr, profile, predicted, chroma, upscale)
+    if correlated.value is not None and correlated.confidence >= MIN_OCR_CONFIDENCE:
+        return correlated
     if fallback is not None:
         return fallback
-    return best
+    return correlated if correlated.suffix_box is not None else best
+
+
+# ---------------------------------------------------------------------------
+# Correlation reading (no segmentation)
+# ---------------------------------------------------------------------------
+
+def _crop_ink(canvas: np.ndarray, threshold: float = 40.0) -> Optional[np.ndarray]:
+    """Trim the normalized canvas down to the glyph itself.
+
+    ``normalize_glyph`` pads every glyph into the same 12x16 box, so a raw
+    canvas template is far wider than a narrow digit.  Correlating with that
+    padding made the tens digit fail the adjacency check (``19초`` read as
+    ``9초``), because the template box overlapped its neighbour.
+    """
+    mask = canvas >= threshold
+    if not mask.any():
+        return None
+    ys, xs = np.nonzero(mask)
+    return canvas[int(ys.min()):int(ys.max()) + 1, int(xs.min()):int(xs.max()) + 1]
+
+
+def appearance_patch(field: np.ndarray, box, height: int = PATCH_HEIGHT,
+                     margin_ratio: float = PATCH_MARGIN) -> Optional[np.ndarray]:
+    """Cut a glyph out of a score image, with its real surroundings.
+
+    Normalized to a fixed ink height so templates from different resolutions
+    stay comparable.  The margin is deliberately real background rather than
+    zero padding: it is what lets correlation reject a ``1`` that sits on the
+    left stroke of a ``4``.
+    """
+    if field is None or field.size == 0:
+        return None
+    x, y, w, h = (int(v) for v in box)
+    if h < 4 or w < 2:
+        return None
+    pad = int(round(h * margin_ratio))
+    x0, y0 = max(0, x - pad), max(0, y - pad)
+    x1, y1 = min(field.shape[1], x + w + pad), min(field.shape[0], y + h + pad)
+    crop = field[y0:y1, x0:x1]
+    if crop.shape[0] < 6 or crop.shape[1] < 4:
+        return None
+    # 잘린 여백만큼 되메워 항상 같은 비율로 맞춘다.
+    top, bottom = pad - (y - y0), pad - (y1 - (y + h))
+    left, right = pad - (x - x0), pad - (x1 - (x + w))
+    if any(v > 0 for v in (top, bottom, left, right)):
+        crop = cv2.copyMakeBorder(crop, max(0, top), max(0, bottom),
+                                  max(0, left), max(0, right), cv2.BORDER_REPLICATE)
+    scale = float(height) / float(h)
+    out_h = max(6, int(round(crop.shape[0] * scale)))
+    out_w = max(4, int(round(crop.shape[1] * scale)))
+    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    resized = cv2.resize(crop.astype(np.float32), (out_w, out_h),
+                         interpolation=interpolation)
+    return np.clip(resized, 0, 255).astype(np.uint8)
+
+
+def _stencil_at(canvas: np.ndarray, scale: float,
+                margin: int = 0) -> Optional[np.ndarray]:
+    """Scale a cropped stencil, soften it, and surround it with background.
+
+    The in-game text is 8px and heavily anti-aliased; a hard-edged template
+    correlates poorly with it.  The empty margin matters just as much: a bare
+    ``1`` is a vertical bar that correlates strongly with part of a ``4`` or
+    with the left stroke of ``초``, and every misread in the first correlation
+    build was exactly that (``14초`` read as ``1초``).  Requiring the
+    surrounding pixels to be background removes those matches.
+    """
+    width = int(round(canvas.shape[1] * scale))
+    height = int(round(canvas.shape[0] * scale))
+    if width < 3 or height < 5:
+        return None
+    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    resized = cv2.resize(canvas, (width, height), interpolation=interpolation)
+    softened = cv2.GaussianBlur(resized, (0, 0), max(0.6, scale * 0.4))
+    if margin > 0:
+        softened = cv2.copyMakeBorder(softened, margin, margin, margin, margin,
+                                      cv2.BORDER_CONSTANT, value=0.0)
+    return softened
+
+
+def _correlate_timer(field: np.ndarray, digit_stencils: dict,
+                     suffix_stencil: np.ndarray, glyph_height: float,
+                     mode: str) -> Optional[TimerReading]:
+    """Find ``N초`` in one score image by template correlation.
+
+    The suffix is located first: it is the widest, most distinctive shape in the
+    strip, and it fixes both the baseline and the scale.  Digits are then taken
+    from the band left of it, right to left, and each one has to sit on that
+    baseline and touch the previous glyph.  Nothing is binarized, so a warm
+    background cannot merge into a glyph or cut one in half.
+
+    Templates are appearance patches (:func:`appearance_patch`) whose ink height
+    is :data:`PATCH_HEIGHT` and which carry a :data:`PATCH_MARGIN` band of real
+    background around the glyph.
+    """
+    scale = float(glyph_height) / float(PATCH_HEIGHT)
+    margin = int(round(PATCH_MARGIN * glyph_height))
+    suffix_template = _stencil_at(suffix_stencil, scale)
+    if suffix_template is None:
+        return None
+    sh = suffix_template.shape[0] - 2 * margin
+    sw = suffix_template.shape[1] - 2 * margin
+    if sh < 5 or sw < 5 or field.shape[0] <= suffix_template.shape[0] \
+            or field.shape[1] <= suffix_template.shape[1]:
+        return None
+    response = cv2.matchTemplate(field, suffix_template, cv2.TM_CCOEFF_NORMED)
+    _lo, suffix_score, _lo_at, suffix_at = cv2.minMaxLoc(response)
+    if suffix_score < NCC_MIN_SUFFIX:
+        return None
+    sx, sy = int(suffix_at[0]) + margin, int(suffix_at[1]) + margin
+    baseline = sy + sh
+
+    templates = {}
+    for digit, canvas in digit_stencils.items():
+        template = _stencil_at(canvas, scale)
+        if template is not None and template.shape[0] > 2 * margin + 3:
+            templates[int(digit)] = template
+    if len(templates) < MIN_TRAINED_DIGITS:
+        return None
+
+    pad = int(round(0.30 * sh))
+    y0, y1 = max(0, sy - pad - margin), min(field.shape[0], baseline + pad + margin)
+    x0 = max(0, sx - int(round(2.8 * sh)) - margin)
+    x1 = min(field.shape[1], sx + int(round(0.20 * sh)))
+    band = field[y0:y1, x0:x1]
+
+    # 자리마다 폭이 다르므로(1 은 좁다) 숫자별로 따로 정합한 뒤 모아서 겨룬다.
+    found = []
+    for digit, template in templates.items():
+        if band.shape[0] <= template.shape[0] or band.shape[1] <= template.shape[1]:
+            continue
+        ink_h = template.shape[0] - 2 * margin
+        ink_w = template.shape[1] - 2 * margin
+        digit_response = cv2.matchTemplate(band, template, cv2.TM_CCOEFF_NORMED)
+        work = digit_response.copy()
+        for _ in range(NCC_MAX_DIGITS):
+            flat = int(np.argmax(work))
+            y, x = np.unravel_index(flat, work.shape)
+            value = float(work[y, x])
+            if value < NCC_MIN_DIGIT:
+                break
+            ax = x0 + int(x) + margin
+            ay = y0 + int(y) + margin
+            if abs((ay + ink_h) - baseline) <= 0.28 * sh:
+                found.append((ax, ay, ink_w, ink_h, value, digit))
+            span = max(2, int(round(0.35 * sh)))
+            work[:, max(0, int(x) - span):int(x) + span + 1] = -2.0
+    if not found:
+        return None
+
+    # 같은 자리를 여러 숫자가 주장하면 가장 잘 맞는 하나만 남긴다.
+    found.sort(key=lambda item: -item[4])
+    kept: list[tuple] = []
+    for candidate in found:
+        centre = candidate[0] + candidate[2] * 0.5
+        if any(abs(centre - (k[0] + k[2] * 0.5)) < 0.35 * sh for k in kept):
+            continue
+        kept.append(candidate)
+
+    # 오른쪽(1의 자리)부터, 서로 붙어 있는 숫자만 받아들인다. 떨어져 있는 피크는
+    # 옆 칸 글자나 배경 무늬다.
+    kept.sort(key=lambda item: -item[0])
+    accepted: list[tuple] = []
+    for candidate in kept:
+        ax, _ay, tw, _th, _value, _digit = candidate
+        right = ax + tw
+        if not accepted:
+            if not (-0.10 * sh <= sx - right <= 0.55 * sh):
+                continue
+        else:
+            gap = accepted[-1][0] - right
+            if not (-0.10 * sh <= gap <= 0.40 * sh):
+                continue
+        accepted.append(candidate)
+        if len(accepted) >= NCC_MAX_DIGITS:
+            break
+    if not accepted:
+        return None
+    accepted.reverse()
+
+    digit_boxes = [(ax, ay, tw, th) for ax, ay, tw, th, _value, _digit in accepted]
+    suffix_box = (sx, sy, sw, sh)
+    peak = float(field.max())
+    binary = (field >= max(10.0, peak * TIMER_SCORE_FRACTION)).astype(np.uint8) * 255
+
+    # 앞자리를 놓친 후보는 버린다. '15초' 에서 1 을 못 찾으면 5초로 읽히는데,
+    # 그것이 상관 경로에 남아 있던 오독 전부였다. 맨 왼쪽 숫자의 왼쪽에 글자
+    # 두께의 잉크가 남아 있으면 아직 숫자가 하나 더 있다는 뜻이다.
+    if len(accepted) < NCC_MAX_DIGITS:
+        leftmost = min(box[0] for box in digit_boxes)
+        left_from = max(0, int(leftmost - round(0.95 * sh)))
+        if leftmost - left_from >= 4:
+            band_left = binary[max(0, sy):baseline, left_from:leftmost]
+            if band_left.size and float(np.count_nonzero(band_left)) / band_left.size > 0.05:
+                return None
+
+    sub_second = has_decimal_point(binary, suffix_box, digit_boxes)
+    weakest = min(item[4] for item in accepted)
+    # 신뢰도는 숫자 정합만으로 낸다. '초' 템플릿은 정규화 캔버스에서 복원한
+    # 것이라 실측 정합이 0.60 근처에 머무는데(숫자는 0.93), 그 값을 신뢰도에
+    # 섞으면 제대로 읽은 프레임까지 임계 아래로 끌려 내려간다. 접미사는 위치와
+    # 배율을 잡는 역할만 하고, 통과 여부는 NCC_MIN_SUFFIX 가 판단한다.
+    confidence = float(min(1.0, max(0.0, (weakest - 0.60) / 0.37)))
+    seconds = None if sub_second else int("".join(str(item[5]) for item in accepted))
+    return TimerReading(
+        value=seconds, confidence=0.0 if sub_second else confidence,
+        glyph_count=0 if sub_second else len(digit_boxes), sub_second=sub_second,
+        mode=f"ncc-{mode}", threshold=int(round(weakest * 100)),
+        binary=binary, digit_boxes=digit_boxes, suffix_box=suffix_box,
+        signature=None if sub_second else digit_signature(binary, digit_boxes),
+    )
+
+
+def read_timer_by_correlation(roi_bgr: np.ndarray, profile: "TimerGlyphProfile",
+                              predicted: Optional[float] = None,
+                              chroma: tuple[float, float] = None,
+                              upscale: int = TIMER_UPSCALE) -> TimerReading:
+    """Read the timer without segmenting anything.
+
+    Used when the segmentation path found no usable candidate at all, which is
+    what happens over a boss arena whose background is as warm as the text.
+    Ranking follows the same rules as :func:`read_timer_value`.
+    """
+    best = TimerReading()
+    if roi_bgr is None or roi_bgr.size == 0 or not profile.trusted:
+        return best
+    if not getattr(profile, "patches", None):
+        return best
+
+    big = upscale_roi(roi_bgr, upscale)
+    ranked: list[tuple[tuple, TimerReading]] = []
+    fallback: Optional[TimerReading] = None
+    for priority, mode in enumerate(TIMER_SCORE_MODES):
+        digit_stencils, suffix_stencil = profile.patch_stencils(mode)
+        if len(digit_stencils) < MIN_TRAINED_DIGITS or suffix_stencil is None:
+            continue
+        score_image = timer_score(big, mode, chroma, upscale)
+        if score_image.size == 0 or int(score_image.max()) < TIMER_MIN_PEAK:
+            continue
+        field = score_image.astype(np.float32)
+        for ratio in NCC_HEIGHT_RATIOS:
+            reading = _correlate_timer(field, digit_stencils, suffix_stencil,
+                                       big.shape[0] * ratio, mode)
+            if reading is None:
+                continue
+            if reading.value is None or reading.confidence < MIN_OCR_CONFIDENCE:
+                if fallback is None or reading.confidence > fallback.confidence:
+                    fallback = reading
+                continue
+            agrees = (predicted is not None
+                      and abs(float(reading.value) - float(predicted)) <= 2.5)
+            ranked.append(((0 if agrees else 1, -reading.glyph_count,
+                            -round(reading.confidence, 3), priority), reading))
+    if ranked:
+        ranked.sort(key=lambda item: item[0])
+        winner = ranked[0][1]
+        winner.candidates = len(ranked)
+        return winner
+    return fallback if fallback is not None else best
 
 
 def sample_text_color(roi_bgr: np.ndarray, binary: np.ndarray,
@@ -1627,17 +2043,25 @@ def train_timer_profile(sample_paths: Iterable[Path], debuff_id: str = DEFAULT_D
             continue
         text = str(label)
         variants = 0
-        for binary, suffix_box, digit_boxes, _mode, _thr, _priority in timer_hypotheses(image):
+        fields: dict[str, np.ndarray] = {}
+        big = upscale_roi(image, TIMER_UPSCALE)
+        for binary, suffix_box, digit_boxes, mode, _thr, _priority in timer_hypotheses(image):
             if len(digit_boxes) != len(text):
                 continue
             if has_decimal_point(binary, suffix_box, digit_boxes):
                 continue
+            if mode not in fields:
+                fields[mode] = timer_score(big, mode, None, TIMER_UPSCALE)
+            field_image = fields[mode]
             for char, box in zip(text, digit_boxes):
                 for glyph in glyph_variants(binary, box):
                     if profile.add_digit(int(char), glyph):
                         added += 1
+                # 상관 정합용 외형 템플릿. 이진화 이전의 점수 이미지에서 딴다.
+                profile.add_patch(int(char), appearance_patch(field_image, box), mode)
                 heights.append(int(box[3]))
             profile.add_suffix(normalize_glyph(binary, suffix_box))
+            profile.add_patch(None, appearance_patch(field_image, suffix_box), mode)
             variants += 1
         if variants:
             used += 1
@@ -1645,6 +2069,7 @@ def train_timer_profile(sample_paths: Iterable[Path], debuff_id: str = DEFAULT_D
             skipped.append(f"{path.name}: 라벨과 맞는 분리 결과가 없음")
     if heights:
         profile.text_height = int(np.median(heights))
+    templates = profile.compact_patches()
     profile.accuracy = profile.self_accuracy()
     profile._loo = profile.accuracy
     profile.source = "calibration"
@@ -1654,6 +2079,7 @@ def train_timer_profile(sample_paths: Iterable[Path], debuff_id: str = DEFAULT_D
         "ok": profile.trusted,
         "used_images": used,
         "added_glyphs": added,
+        "templates": templates,
         "digits": profile.digit_coverage,
         "trusted": profile.trusted,
         "accuracy": round(float(profile.accuracy), 3),

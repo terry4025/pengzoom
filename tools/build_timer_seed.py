@@ -7,6 +7,7 @@
 
 사용법:
     py -3.14 tools/build_timer_seed.py [원본_샘플_폴더]
+    py -3.14 tools/build_timer_seed.py --verified   # 이미 커밋된 프레임으로만 재학습
 """
 import shutil
 import sys
@@ -22,7 +23,30 @@ VERIFIED_DIR = ROOT / "boss_debuff_assets" / "samples" / "verified"
 PROFILE_PATH = ROOT / "boss_debuff_assets" / "timer_profiles" / f"{bd.DEFAULT_DEBUFF_ID}.json"
 
 
+def train(frames) -> int:
+    result = bd.train_timer_profile(
+        sorted(frames),
+        bd.DEFAULT_DEBUFF_ID,
+        base_profile=bd.TimerGlyphProfile(profile_id=bd.DEFAULT_DEBUFF_ID),
+        output_path=PROFILE_PATH,
+    )
+    result["source"] = "verified-samples"
+    print(f"학습 이미지 {result['used_images']}장 · 글리프 {result['added_glyphs']}개 · "
+          f"숫자 {result['digits']} · 정확도 {result['accuracy']} · 신뢰 {result['trusted']}")
+    for line in result["skipped"]:
+        print("  건너뜀:", line)
+    return 0 if result["trusted"] else 1
+
+
 def main() -> int:
+    if "--verified" in sys.argv[1:]:
+        frames = sorted(VERIFIED_DIR.glob("*.png"))
+        if not frames:
+            print(f"검증 프레임이 없습니다: {VERIFIED_DIR}")
+            return 1
+        print(f"이미 커밋된 검증 프레임 {len(frames)}장으로 재학습")
+        return train(frames)
+
     source = Path(sys.argv[1]) if len(sys.argv) > 1 else \
         bd.user_data_root() / "samples" / bd.DEFAULT_DEBUFF_ID
     index = load_index(source)
@@ -43,19 +67,7 @@ def main() -> int:
         shutil.copyfile(path, target)
         copied.append(target)
     print(f"검증 프레임 {len(copied)}장 복사 -> {VERIFIED_DIR}")
-
-    result = bd.train_timer_profile(
-        sorted(copied),
-        bd.DEFAULT_DEBUFF_ID,
-        base_profile=bd.TimerGlyphProfile(profile_id=bd.DEFAULT_DEBUFF_ID),
-        output_path=PROFILE_PATH,
-    )
-    result["source"] = "verified-samples"
-    print(f"학습 이미지 {result['used_images']}장 · 글리프 {result['added_glyphs']}개 · "
-          f"숫자 {result['digits']} · 정확도 {result['accuracy']} · 신뢰 {result['trusted']}")
-    for line in result["skipped"]:
-        print("  건너뜀:", line)
-    return 0 if result["trusted"] else 1
+    return train(copied)
 
 
 if __name__ == "__main__":

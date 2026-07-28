@@ -337,6 +337,7 @@ class StubProfile:
     def __init__(self, table):
         self.table = table          # {태그: (값, 신뢰도)}
         self.trusted = True
+        self.patches = []           # 상관 정합 템플릿 없음 = 그 경로는 쓰이지 않는다
 
     @staticmethod
     def _tag(binary):
@@ -518,6 +519,94 @@ class RankedTimerReaderTests(unittest.TestCase):
         self.assertLess(reading.confidence, bdd.MIN_OCR_CONFIDENCE)
         self.assertIsNotNone(reading.suffix_box, "후보 자체는 트래커에 넘겨야 한다")
         self.assertEqual(reading.glyph_count, 2, "자리수 앵커는 계속 살아 있어야 한다")
+
+
+class CorrelationReaderTests(unittest.TestCase):
+    """세그먼테이션 없이 외형 템플릿을 직접 정합하는 경로."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.profile = TimerGlyphProfile.load(
+            ROOT / "boss_debuff_assets" / "timer_profiles" / f"{DEFAULT_DEBUFF_ID}.json"
+        )
+        assert cls.profile is not None
+        cls.frames = verified_frames()
+
+    def test_bundled_profile_carries_appearance_templates(self):
+        """번들 프로파일에 채널별 외형 템플릿이 들어 있어야 한다."""
+        self.assertEqual(self.profile.version, bdd.PROFILE_VERSION)
+        self.assertTrue(self.profile.patches, "외형 템플릿이 없습니다")
+        modes = set(self.profile.patch_modes)
+        self.assertIn("warm", modes)
+        digits, suffix = self.profile.patch_stencils("warm")
+        self.assertGreaterEqual(len(digits), bdd.MIN_TRAINED_DIGITS)
+        self.assertIsNotNone(suffix, "'초' 외형 템플릿이 없습니다")
+        # 평균 하나만 남기므로 채널 수 * (숫자 10 + 초 1) 을 넘지 않는다.
+        self.assertLessEqual(len(self.profile.patches),
+                            len(bdd.TIMER_SCORE_MODES) * 11)
+
+    def test_appearance_patch_normalizes_the_ink_height(self):
+        field = np.zeros((64, 176), np.uint8)
+        cv2.rectangle(field, (40, 13), (54, 44), 255, 4)
+        patch = bdd.appearance_patch(field, (40, 13, 15, 32))
+        self.assertIsNotNone(patch)
+        expected = bdd.PATCH_HEIGHT * (1 + 2 * bdd.PATCH_MARGIN)
+        self.assertAlmostEqual(patch.shape[0], expected, delta=3)
+
+    def test_reads_the_verified_frames_without_a_misread(self):
+        read = correct = 0
+        for _name, label, roi in self.frames:
+            reading = bdd.read_timer_by_correlation(roi, self.profile)
+            if reading.value is None or reading.confidence < bdd.MIN_OCR_CONFIDENCE:
+                continue
+            read += 1
+            correct += int(reading.value == label)
+        self.assertGreaterEqual(read, len(self.frames) - 3,
+                                f"판독 {read}/{len(self.frames)}")
+        self.assertEqual(read, correct, f"오독 {read - correct}건")
+
+    def test_beats_segmentation_on_a_warm_arena_without_misreading(self):
+        """배경이 글자와 같은 계열로 물든 프레임에서 이 경로만 살아남는다."""
+        segmented = correlated = correct = 0
+        for _name, label, roi in self.frames:
+            hostile = warm_arena(roi, glow=60)
+            if read_warm_channel_only(hostile, self.profile) is not None:
+                segmented += 1
+            reading = bdd.read_timer_by_correlation(hostile, self.profile)
+            if reading.value is None or reading.confidence < bdd.MIN_OCR_CONFIDENCE:
+                continue
+            correlated += 1
+            correct += int(reading.value == label)
+        self.assertEqual(correlated, correct, f"오독 {correlated - correct}건")
+        self.assertGreater(correlated, segmented,
+                           f"상관 {correlated} vs 분리 {segmented}")
+        self.assertGreaterEqual(correlated, len(self.frames) // 2)
+
+    def test_two_digit_frames_are_never_read_as_one_digit(self):
+        """앞자리를 놓친 후보는 버려야 한다. '15초' 를 '5초' 로 읽던 실패다."""
+        for _name, label, roi in self.frames:
+            if label < 10:
+                continue
+            for glow in (0, 60):
+                image = roi if glow == 0 else warm_arena(roi, glow=glow)
+                reading = bdd.read_timer_by_correlation(image, self.profile)
+                if reading.value is None or reading.confidence < bdd.MIN_OCR_CONFIDENCE:
+                    continue
+                self.assertGreaterEqual(reading.value, 10,
+                                        f"{_name} glow={glow} -> {reading.value}")
+
+    def test_untrained_profile_reads_nothing(self):
+        profile = TimerGlyphProfile(profile_id=DEFAULT_DEBUFF_ID)
+        reading = bdd.read_timer_by_correlation(self.frames[0][2], profile)
+        self.assertIsNone(reading.value)
+
+    def test_ranked_reader_falls_back_to_correlation(self):
+        """분리 후보가 하나도 없으면 상관 정합 결과를 쓴다."""
+        roi = self.frames[0][2]
+        with mock.patch.object(bdd, "timer_hypotheses", return_value=iter([])):
+            reading = bdd.read_timer_value(roi, self.profile)
+        self.assertIsNotNone(reading.value)
+        self.assertTrue(reading.mode.startswith("ncc-"), reading.mode)
 
 
 class TrackerTests(unittest.TestCase):
@@ -731,8 +820,24 @@ class DetectorTests(unittest.TestCase):
             self.assertGreaterEqual(state["score"], 0.95)
             self.assertEqual(state["glyph_count"], 1)
             self.assertEqual(state["cell"][:2], list(to_band(CELL_ABS_A)[:2]))
-            # Only one digit was ever visible and the seed profile is untrusted,
-            # so the detector must not invent a number.
+            # 이 밴드에는 '9초' 가 찍혀 있다. 상관 정합 경로가 붙은 뒤로는 실제로
+            # 그 값을 읽어낸다(예전에는 분리에 실패해 'unknown' 이었다).
+            self.assertEqual(state["source"], "ocr")
+            self.assertAlmostEqual(state["remaining"], 9.0, delta=1.0)
+
+    def test_no_number_is_invented_without_a_trained_profile(self):
+        """프로파일이 없으면 남은 시간을 만들어내지 않는다."""
+        with tempfile.TemporaryDirectory() as temp:
+            detector = self.make_detector(temp)
+            detector.profile = TimerGlyphProfile(profile_id=DEFAULT_DEBUFF_ID)
+            detector.tracker.expect_ocr = False
+            band = read(BAND_A)
+            now = 500.0
+            state = None
+            for _ in range(ACTIVATE_FRAMES + 1):
+                state = detector.analyze_band(band, now)
+                now += 0.1
+            self.assertTrue(state["active"])
             self.assertIsNone(state["remaining"])
             self.assertEqual(state["source"], "unknown")
 
@@ -749,26 +854,38 @@ class DetectorTests(unittest.TestCase):
             self.assertLess(state["score"], DEFAULT_MATCH_THRESHOLD)
 
     def test_configured_duration_gives_seconds_on_the_real_band(self):
+        """숫자를 읽을 수 없을 때만 지속시간 추정이 화면에 나온다.
+
+        번들 프로파일이 이 밴드의 '9초' 를 읽어버리므로, 추정 경로를 관찰하려면
+        프로파일을 비워 OCR 을 끈 상태로 재현한다.
+        """
         with tempfile.TemporaryDirectory() as temp:
             detector = self.make_detector(temp)
             detector.configure(duration=10.0)
+            detector.profile = TimerGlyphProfile(profile_id=DEFAULT_DEBUFF_ID)
+            detector.tracker.expect_ocr = False
             band = read(BAND_A)
             now = 500.0
             state = None
             for _ in range(ACTIVATE_FRAMES + 1):
                 state = detector.analyze_band(band, now)
                 now += 0.1
-            if detector.profile.trusted:
-                # 숫자를 읽을 수 있는 상태에서는 첫 순간에 추정값을 내보내지 않는다.
-                # 학습된 총 지속시간이 어긋나 있으면 캐스트 시작마다 틀린 숫자가
-                # 스쳐 지나가기 때문이다(28초로 시작하던 증상).
-                self.assertEqual(state["source"], "unknown")
-                self.assertIsNone(state["remaining"])
+            self.assertEqual(state["source"], "duration")
+            self.assertAlmostEqual(state["remaining"], 10.0 - (now - 500.0 - 0.1), delta=0.2)
+
+    def test_confident_reading_outranks_the_configured_duration(self):
+        """읽은 값이 있으면 지속시간 추정보다 우선한다."""
+        with tempfile.TemporaryDirectory() as temp:
+            detector = self.make_detector(temp)
+            detector.configure(duration=10.0)
+            band = read(BAND_A)
+            now = 500.0
+            state = None
             while now < 500.0 + bdd.OCR_GRACE_SEC + 0.3:
                 state = detector.analyze_band(band, now)
                 now += 0.1
-            self.assertEqual(state["source"], "duration")
-            self.assertAlmostEqual(state["remaining"], 10.0 - (now - 500.0 - 0.1), delta=0.2)
+            self.assertEqual(state["source"], "ocr")
+            self.assertAlmostEqual(state["remaining"], 9.0, delta=1.0)
 
     def test_auto_region_covers_the_reference_cell(self):
         with tempfile.TemporaryDirectory() as temp:
