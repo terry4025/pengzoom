@@ -1,1 +1,0 @@
-tools/_adv.png (256, 880, 3) 행=원본/파랑/주황/살몬, 열=이미지 warm점수 warm이진 bright점수 bright이진

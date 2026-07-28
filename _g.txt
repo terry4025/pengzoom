@@ -1,3 +1,0 @@
-dark_grenade_041_19s.png label=19 thr=58 -> no-suffix-or-digits
-dark_grenade_055_12s.png label=12 thr=56 -> height bh=27 sh=46
-{'OK': 55, 'no-suffix-or-digits': 1, 'height bh=27 sh=46': 1}
