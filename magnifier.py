@@ -16,10 +16,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QVBoxLayout,
                              QDialog, QSizeGrip, QSizePolicy, QGridLayout, QTabWidget,
                              QLineEdit, QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
                              QCheckBox, QSpinBox, QComboBox, QDoubleSpinBox)
-from PyQt6.QtCore import (QTimer, Qt, QPoint, QRect, QRectF, pyqtSignal, QObject,
+from PyQt6.QtCore import (QTimer, Qt, QPoint, QPointF, QRect, QRectF, pyqtSignal, QObject,
                           QSize, QPropertyAnimation, QEasingCurve)
 from PyQt6.QtGui import (QImage, QPixmap, QCursor, QPainter, QPainterPath, QPen, QColor,
-                         QIcon, QKeySequence, QWheelEvent, QFont, QFontMetrics, QBrush)
+                         QIcon, QKeySequence, QWheelEvent, QFont, QFontMetrics, QBrush,
+                         QPolygonF)
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
 from pynput import keyboard
@@ -280,6 +281,589 @@ VIEWPORT_STYLE_FRAMED = (
 )
 
 VIEWPORT_STYLE_BARE = 'border-radius: 0px; background-color: #000000; border: none;'
+
+
+# ---------------------------------------------------------------------------
+# 모달 공용 디자인 시스템
+# ---------------------------------------------------------------------------
+# 설정/파티설정/도움말 모달이 각자 인라인 QSS를 들고 있어서 탭 모양, 입력창
+# 라운드, 버튼 색이 조금씩 달랐다. 팔레트와 컴포넌트 규칙을 한 곳에 모은다.
+#
+# 색 규칙: 크롬은 전부 무채색, 액센트(#0a84ff)는 '지금 활성/선택된 것' 하나에만.
+# 의미색은 상태 표시에만 쓴다(성공 #30d158 / 경고 #ff9f0a / 위험 #ff453a).
+UI = {
+    "bg": "rgba(22, 22, 25, 0.97)",
+    "border": "rgba(255, 255, 255, 0.10)",
+    "surface": "rgba(255, 255, 255, 0.04)",
+    "surface_hi": "rgba(255, 255, 255, 0.07)",
+    "hairline": "rgba(255, 255, 255, 0.07)",
+    "text": "#f5f5f7",
+    "text_dim": "rgba(245, 245, 247, 0.62)",
+    "text_faint": "rgba(245, 245, 247, 0.38)",
+    "accent": "#0a84ff",
+    "accent_hi": "#2b95ff",
+    "ok": "#30d158",
+    "warn": "#ff9f0a",
+    "danger": "#ff453a",
+    "font": "'Segoe UI Variable Display', 'Segoe UI', 'Malgun Gothic', sans-serif",
+    "mono": "'Consolas', 'Segoe UI', monospace",
+}
+
+_CHECK_ASSET_PATH = None
+
+
+def get_check_asset_path():
+    """체크박스 인디케이터용 체크마크 PNG를 캐시에 생성하고 경로를 돌려준다.
+
+    QSS의 image: 속성은 파일 경로만 받는다. 액센트 채움만으로는 hover와 checked를
+    구분하기 어려워 실제 체크마크를 그려 둔다.
+    """
+    global _CHECK_ASSET_PATH
+    if _CHECK_ASSET_PATH:
+        return _CHECK_ASSET_PATH
+    try:
+        path = os.path.join(CACHE_DIR, "ui_check_white.png")
+        if not os.path.exists(path):
+            pixmap = QPixmap(17, 17)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(QColor("#ffffff"), 2.2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPolyline(QPolygonF([
+                QPointF(4.0, 9.0), QPointF(7.2, 12.2), QPointF(13.0, 5.2),
+            ]))
+            painter.end()
+            pixmap.save(path, "PNG")
+        # QSS는 백슬래시를 이스케이프로 해석하므로 슬래시로 정규화한다.
+        _CHECK_ASSET_PATH = path.replace("\\", "/")
+    except Exception:
+        _CHECK_ASSET_PATH = ""
+    return _CHECK_ASSET_PATH
+
+
+_CHEVRON_ASSET_PATH = None
+
+
+def get_chevron_asset_path():
+    """콤보박스 드롭다운 화살표용 셰브론 PNG를 캐시에 생성하고 경로를 돌려준다.
+
+    QSS로 ::drop-down 을 커스터마이즈하면 Qt가 네이티브 화살표를 더 이상 그리지
+    않는다. 직접 그려서 image: 로 넣어야 '펼칠 수 있는 입력'임이 보인다.
+    """
+    global _CHEVRON_ASSET_PATH
+    if _CHEVRON_ASSET_PATH:
+        return _CHEVRON_ASSET_PATH
+    try:
+        path = os.path.join(CACHE_DIR, "ui_chevron_down.png")
+        if not os.path.exists(path):
+            pixmap = QPixmap(12, 12)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(QColor("#c7c7cc"), 1.7)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPolyline(QPolygonF([
+                QPointF(2.8, 4.6), QPointF(6.0, 7.8), QPointF(9.2, 4.6),
+            ]))
+            painter.end()
+            pixmap.save(path, "PNG")
+        _CHEVRON_ASSET_PATH = path.replace("\\", "/")
+    except Exception:
+        _CHEVRON_ASSET_PATH = ""
+    return _CHEVRON_ASSET_PATH
+
+
+_MODAL_STYLE_CACHE = None
+
+
+def get_modal_style():
+    """모달 공용 QSS를 생성한다(생성 비용이 있어 한 번만 만든다).
+
+    모듈 최상단에서 만들지 않는 이유는 CACHE_DIR 등 아래에서 정의되는 값을
+    참조해야 하기 때문이다.
+    """
+    global _MODAL_STYLE_CACHE
+    if _MODAL_STYLE_CACHE is not None:
+        return _MODAL_STYLE_CACHE
+
+    check_path = get_check_asset_path()
+    check_rule = f"image: url({check_path});" if check_path else ""
+
+    chevron_path = get_chevron_asset_path()
+    chevron_rule = f"image: url({chevron_path});" if chevron_path else ""
+
+    _MODAL_STYLE_CACHE = (MODAL_STYLE_TEMPLATE
+                          .replace("__CHECK_IMAGE__", check_rule)
+                          .replace("__CHEVRON_IMAGE__", chevron_rule))
+    return _MODAL_STYLE_CACHE
+
+
+MODAL_STYLE_TEMPLATE = f"""
+    #ModalContainer {{
+        background-color: {UI['bg']};
+        border: 1px solid {UI['border']};
+        border-radius: 18px;
+    }}
+    QWidget {{
+        font-family: {UI['font']};
+        color: {UI['text']};
+    }}
+    QLabel {{
+        font-size: 12px;
+        background: transparent;
+    }}
+    /* 모달 제목 / 섹션 제목 / 항목 라벨 / 보조 설명의 4단 위계 */
+    QLabel#ModalTitle {{
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+    }}
+    QLabel#ModalSubtitle {{
+        font-size: 10px;
+        font-weight: 600;
+        color: {UI['text_faint']};
+    }}
+    QLabel#SectionTitle {{
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 1.1px;
+        color: {UI['text_dim']};
+    }}
+    QLabel#FieldLabel {{
+        font-size: 12px;
+        font-weight: 600;
+        color: {UI['text_dim']};
+    }}
+    QLabel#Hint {{
+        font-size: 11px;
+        color: {UI['text_faint']};
+    }}
+    QLabel#ValueMono {{
+        font-family: {UI['mono']};
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QLabel#StatusOk    {{ font-size: 11px; font-weight: 700; color: {UI['ok']}; }}
+    QLabel#StatusWarn  {{ font-size: 11px; font-weight: 700; color: {UI['warn']}; }}
+    QLabel#StatusError {{ font-size: 11px; font-weight: 700; color: {UI['danger']}; }}
+    QLabel#StatusIdle  {{ font-size: 11px; font-weight: 700; color: {UI['text_faint']}; }}
+    QLabel#StatusInfo  {{ font-size: 11px; font-weight: 700; color: {UI['accent']}; }}
+
+    /* 섹션 카드: 관련 설정을 하나의 면으로 묶는다 */
+    QFrame#Card {{
+        background-color: {UI['surface']};
+        border: 1px solid {UI['hairline']};
+        border-radius: 12px;
+    }}
+    QFrame#Divider {{
+        background-color: {UI['hairline']};
+        border: none;
+        max-height: 1px;
+        min-height: 1px;
+    }}
+
+    /* 탭바를 세그먼티드 컨트롤로. 기존의 테두리 있는 브라우저 탭 모양을 버린다 */
+    QTabWidget::pane {{
+        border: none;
+        background: transparent;
+        top: -1px;
+    }}
+    QTabWidget::tab-bar {{
+        alignment: left;
+    }}
+    QTabBar {{
+        qproperty-drawBase: 0;
+        background: transparent;
+    }}
+    QTabBar::tab {{
+        background: transparent;
+        border: none;
+        border-radius: 9px;
+        padding: 7px 16px;
+        margin-right: 3px;
+        color: {UI['text_dim']};
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QTabBar::tab:hover {{
+        background: {UI['surface_hi']};
+        color: {UI['text']};
+    }}
+    QTabBar::tab:selected {{
+        background: {UI['accent']};
+        color: #ffffff;
+        font-weight: 700;
+    }}
+
+    /* 버튼: 기본은 무채색 고스트, 액센트는 명시적으로 지정할 때만 */
+    QPushButton {{
+        background-color: {UI['surface_hi']};
+        color: {UI['text']};
+        border: 1px solid {UI['border']};
+        border-radius: 9px;
+        padding: 7px 14px;
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QPushButton:hover {{
+        background-color: rgba(255, 255, 255, 0.13);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+    }}
+    QPushButton:pressed {{
+        background-color: rgba(255, 255, 255, 0.06);
+    }}
+    QPushButton:disabled {{
+        color: {UI['text_faint']};
+        background-color: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+    }}
+    QPushButton#PrimaryBtn, QPushButton#SaveBtn {{
+        background-color: {UI['accent']};
+        color: #ffffff;
+        border: none;
+        font-weight: 700;
+        padding: 8px 20px;
+    }}
+    QPushButton#PrimaryBtn:hover, QPushButton#SaveBtn:hover {{
+        background-color: {UI['accent_hi']};
+    }}
+    QPushButton#DangerBtn {{
+        background-color: rgba(255, 69, 58, 0.14);
+        border: 1px solid rgba(255, 69, 58, 0.32);
+        color: {UI['danger']};
+    }}
+    QPushButton#DangerBtn:hover {{
+        background-color: rgba(255, 69, 58, 0.26);
+    }}
+    QPushButton#SuccessBtn {{
+        background-color: rgba(48, 209, 88, 0.14);
+        border: 1px solid rgba(48, 209, 88, 0.32);
+        color: {UI['ok']};
+    }}
+    QPushButton#SuccessBtn:hover {{
+        background-color: rgba(48, 209, 88, 0.26);
+    }}
+    /* 단축키 지정처럼 값을 담는 버튼은 입력창처럼 보이게 한다 */
+    QPushButton#KeyBtn {{
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid {UI['border']};
+        border-radius: 9px;
+        font-family: {UI['mono']};
+        font-size: 12px;
+        font-weight: 700;
+        padding: 8px 14px;
+    }}
+    QPushButton#KeyBtn:hover {{
+        border: 1px solid rgba(10, 132, 255, 0.55);
+        background-color: rgba(10, 132, 255, 0.10);
+    }}
+    QPushButton#KeyBtnArmed {{
+        background-color: rgba(10, 132, 255, 0.20);
+        border: 1px solid {UI['accent']};
+        border-radius: 9px;
+        font-family: {UI['mono']};
+        font-size: 12px;
+        font-weight: 700;
+        padding: 8px 14px;
+        color: #ffffff;
+    }}
+    /* 아이콘 전용 정사각 버튼 */
+    QPushButton#IconBtn {{
+        background-color: {UI['surface_hi']};
+        border: 1px solid {UI['border']};
+        border-radius: 8px;
+        padding: 0px;
+    }}
+    QPushButton#IconBtn:hover {{
+        background-color: rgba(255, 255, 255, 0.16);
+    }}
+    QPushButton#CloseIconBtn {{
+        background-color: {UI['surface_hi']};
+        border: 1px solid {UI['border']};
+        border-radius: 8px;
+        padding: 0px;
+    }}
+    QPushButton#CloseIconBtn:hover {{
+        background-color: rgba(255, 69, 58, 0.85);
+        border: 1px solid rgba(255, 69, 58, 0.9);
+    }}
+
+    QLineEdit {{
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid {UI['border']};
+        border-radius: 9px;
+        color: {UI['text']};
+        padding: 7px 11px;
+        font-size: 12px;
+        selection-background-color: {UI['accent']};
+    }}
+    QLineEdit:focus {{
+        border: 1px solid {UI['accent']};
+        background-color: rgba(10, 132, 255, 0.08);
+    }}
+    QLineEdit:disabled {{
+        color: {UI['text_faint']};
+    }}
+
+    QComboBox {{
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid {UI['border']};
+        border-radius: 9px;
+        padding: 7px 11px;
+        color: {UI['text']};
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QComboBox:hover {{
+        background-color: {UI['surface_hi']};
+        border: 1px solid rgba(255, 255, 255, 0.20);
+    }}
+    QComboBox::drop-down {{
+        border: none;
+        width: 22px;
+    }}
+    QComboBox::down-arrow {{
+        __CHEVRON_IMAGE__
+        width: 12px;
+        height: 12px;
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: #1b1b20;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 10px;
+        selection-background-color: {UI['accent']};
+        selection-color: #ffffff;
+        color: {UI['text']};
+        padding: 5px;
+        outline: none;
+    }}
+
+    QSpinBox, QDoubleSpinBox {{
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid {UI['border']};
+        border-radius: 9px;
+        padding: 6px 9px;
+        color: {UI['text']};
+        font-family: {UI['mono']};
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QSpinBox:focus, QDoubleSpinBox:focus {{
+        border: 1px solid {UI['accent']};
+    }}
+
+    /* 체크박스: 기본 네이티브 인디케이터 대신 액센트 채움 사각형 */
+    QCheckBox {{
+        font-size: 12px;
+        font-weight: 600;
+        color: {UI['text']};
+        spacing: 9px;
+        background: transparent;
+    }}
+    QCheckBox::indicator {{
+        width: 17px;
+        height: 17px;
+        border-radius: 5px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        background-color: rgba(255, 255, 255, 0.05);
+    }}
+    QCheckBox::indicator:hover {{
+        border: 1px solid rgba(10, 132, 255, 0.65);
+    }}
+    QCheckBox::indicator:checked {{
+        background-color: {UI['accent']};
+        border: 1px solid {UI['accent']};
+        __CHECK_IMAGE__
+    }}
+
+    QSlider {{ background: transparent; }}
+    QSlider::groove:horizontal {{
+        height: 4px;
+        background: rgba(255, 255, 255, 0.14);
+        border-radius: 2px;
+    }}
+    QSlider::sub-page:horizontal {{
+        background: {UI['accent']};
+        border-radius: 2px;
+    }}
+    QSlider::handle:horizontal {{
+        background: #ffffff;
+        width: 13px;
+        height: 13px;
+        margin-top: -5px;
+        margin-bottom: -5px;
+        border-radius: 6px;
+    }}
+
+    QListWidget {{
+        background-color: rgba(255, 255, 255, 0.03);
+        border: 1px solid {UI['hairline']};
+        border-radius: 10px;
+        color: {UI['text']};
+        font-size: 12px;
+        padding: 4px;
+        outline: none;
+    }}
+    QListWidget::item {{
+        border-radius: 7px;
+        padding: 7px 9px;
+        margin: 1px 2px;
+    }}
+    QListWidget::item:hover {{
+        background-color: {UI['surface_hi']};
+    }}
+    QListWidget::item:selected {{
+        background-color: rgba(10, 132, 255, 0.28);
+        color: #ffffff;
+    }}
+
+    /* 얇은 오버레이 스크롤바 */
+    QScrollBar:vertical {{
+        background: transparent;
+        width: 8px;
+        margin: 2px;
+    }}
+    QScrollBar::handle:vertical {{
+        background: rgba(255, 255, 255, 0.18);
+        border-radius: 4px;
+        min-height: 28px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: rgba(255, 255, 255, 0.30);
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+        background: none;
+        border: none;
+        height: 0px;
+    }}
+    QScrollArea {{
+        background: transparent;
+        border: none;
+    }}
+"""
+
+
+def build_modal_header(title, subtitle=None, on_close=None, icon_svg=None):
+    """모달 상단 헤더(브랜드 마크 + 제목 + 부제 + 닫기)를 만든다.
+
+    기존 모달들은 제목을 가운데 정렬한 라벨 하나로만 두고 닫기 버튼이 없었다.
+    메인 창과 같은 좌측 정렬 타이틀바 문법으로 통일한다.
+
+    Returns:
+        (QWidget, QPushButton|None) 헤더 위젯과 닫기 버튼
+    """
+    header = QWidget()
+    row = QHBoxLayout(header)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(9)
+
+    mark = QLabel()
+    mark.setFixedSize(22, 22)
+    mark.setPixmap(get_svg_pixmap(icon_svg or LUCIDE_PENGUIN_SVG, 22))
+    row.addWidget(mark)
+
+    text_box = QWidget()
+    text_col = QVBoxLayout(text_box)
+    text_col.setContentsMargins(0, 0, 0, 0)
+    text_col.setSpacing(0)
+    title_label = QLabel(title)
+    title_label.setObjectName("ModalTitle")
+    text_col.addWidget(title_label)
+    if subtitle:
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setObjectName("ModalSubtitle")
+        text_col.addWidget(subtitle_label)
+    row.addWidget(text_box)
+    row.addStretch()
+
+    close_btn = None
+    if on_close is not None:
+        close_btn = QPushButton()
+        close_btn.setObjectName("CloseIconBtn")
+        close_btn.setFixedSize(23, 23)
+        close_btn.setIcon(get_svg_icon(recolor_svg_stroke(LUCIDE_CLOSE_SVG, "#c7c7cc")))
+        close_btn.setIconSize(QSize(13, 13))
+        close_btn.setToolTip("닫기")
+        close_btn.clicked.connect(on_close)
+        row.addWidget(close_btn)
+
+    return header, close_btn
+
+
+def build_section_card(title, icon_svg=None):
+    """섹션 카드를 만든다.
+
+    Returns:
+        (QFrame, QVBoxLayout) 카드와 내용을 담을 레이아웃
+    """
+    card = QFrame()
+    card.setObjectName("Card")
+    outer = QVBoxLayout(card)
+    outer.setContentsMargins(14, 12, 14, 14)
+    outer.setSpacing(10)
+
+    if title:
+        head = QHBoxLayout()
+        head.setSpacing(7)
+        if icon_svg:
+            icon = QLabel()
+            icon.setFixedSize(13, 13)
+            icon.setPixmap(get_svg_pixmap(recolor_svg_stroke(icon_svg, "#9a9aa0"), 13))
+            head.addWidget(icon)
+        label = QLabel(title)
+        label.setObjectName("SectionTitle")
+        head.addWidget(label)
+        head.addStretch()
+        outer.addLayout(head)
+
+    body = QVBoxLayout()
+    body.setSpacing(9)
+    outer.addLayout(body)
+    return card, body
+
+
+def build_divider():
+    line = QFrame()
+    line.setObjectName("Divider")
+    return line
+
+
+def apply_widget_tone(widget, object_name):
+    """objectName을 바꿔 공용 QSS 규칙을 다시 적용한다.
+
+    인라인 setStyleSheet 대신 쓰는 경로다. Qt는 objectName만 바꿔도 스타일을
+    다시 계산하지 않으므로 unpolish/polish로 강제 갱신해야 한다.
+    """
+    widget.setObjectName(object_name)
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+# 스킬 Ready 스냅샷 자리표시자. 점선 테두리로 '아직 비어 있음'을 알린다.
+SNAPSHOT_PLACEHOLDER_STYLE = f"""
+    QLabel {{
+        background-color: rgba(0, 0, 0, 0.35);
+        border: 1px dashed rgba(255, 255, 255, 0.16);
+        border-radius: 9px;
+        color: {UI['text_faint']};
+        font-size: 11px;
+    }}
+"""
+
+# 스냅샷이 실제로 채워졌을 때(픽스맵 표시)의 스타일.
+SNAPSHOT_FILLED_STYLE = """
+    QLabel {
+        background-color: rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(48, 209, 88, 0.45);
+        border-radius: 9px;
+    }
+"""
 
 
 def get_svg_icon(svg_str):
@@ -1785,264 +2369,164 @@ class PartyOverlaySettingsModal(QDialog):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        self.setStyleSheet("""
-            #PartySettingsContainer {
-                background-color: rgba(22, 22, 26, 0.98);
-                border: 1.5px solid rgba(255, 255, 255, 0.12);
-                border-radius: 16px;
-            }
-            QLabel {
-                color: #f5f5f7;
-                font-family: 'Pretendard', 'Malgun Gothic', -apple-system, sans-serif;
-                font-size: 13px;
-                font-weight: 600;
-            }
-            QComboBox {
-                background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 8px;
-                padding: 6px 12px;
-                color: #ffffff;
-                font-family: 'Pretendard', 'Malgun Gothic', -apple-system, sans-serif;
-                font-size: 12px;
-            }
-            QComboBox:hover {
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.20);
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1e1e24;
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                selection-background-color: #0a84ff;
-                selection-color: #ffffff;
-                color: #ffffff;
-                padding: 4px;
-            }
-            QSlider {
-                background: transparent;
-            }
-            QSlider::groove:horizontal {
-                border: none;
-                height: 4px;
-                background: rgba(255, 255, 255, 0.1);
-                border-radius: 2px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #0a84ff;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #ffffff;
-                border: none;
-                width: 14px;
-                height: 14px;
-                margin: -5px 0;
-                border-radius: 7px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #0a84ff;
-            }
-            QPushButton {
-                background-color: rgba(10, 132, 255, 0.15);
-                border: 1px solid rgba(10, 132, 255, 0.3);
-                border-radius: 8px;
-                padding: 8px 16px;
-                font-weight: bold;
-                color: #0a84ff;
-                font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: rgba(10, 132, 255, 0.25);
-            }
-            QPushButton#CloseBtn {
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                color: #ffffff;
-            }
-            QPushButton#CloseBtn:hover {
-                background-color: rgba(255, 255, 255, 0.16);
-            }
-        """)
+        self.setStyleSheet(get_modal_style())
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
         container = QFrame()
-        container.setObjectName("PartySettingsContainer")
+        container.setObjectName("ModalContainer")
         container_lay = QVBoxLayout(container)
-        container_lay.setContentsMargins(20, 20, 20, 20)
+        container_lay.setContentsMargins(20, 16, 20, 18)
         container_lay.setSpacing(12)
-        
-        # Title with Lucide settings icon
-        title_lay = QHBoxLayout()
-        title_lay.setSpacing(8)
-        title_icon = QLabel()
-        title_icon.setFixedSize(20, 20)
-        title_icon.setPixmap(get_svg_pixmap(LUCIDE_SETTINGS_SVG, 20))
-        
-        title_lbl = QLabel("파티 현황 설정")
-        title_lbl.setStyleSheet("font-size: 16px; font-weight: 800; color: #0a84ff;")
-        
-        title_lay.addWidget(title_icon)
-        title_lay.addWidget(title_lbl)
-        title_lay.addStretch()
-        container_lay.addLayout(title_lay)
-        
+
+        header, _ = build_modal_header(
+            "파티 현황 설정",
+            "PARTY HUD",
+            on_close=self.close_and_save,
+            icon_svg=LUCIDE_PALETTE_SVG,
+        )
+        container_lay.addWidget(header)
+        container_lay.addWidget(build_divider())
+
         # 1. Class Selection Group (Dynamic from active party states)
-        class_group = QFrame()
-        class_group.setStyleSheet("QFrame { background-color: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px; }")
-        cg_lay = QVBoxLayout(class_group)
-        cg_lay.setContentsMargins(10, 10, 10, 10)
-        cg_lay.setSpacing(6)
-        
-        cg_title_lay = QHBoxLayout()
-        cg_title_lay.setSpacing(6)
-        user_icon = QLabel()
-        user_icon.setFixedSize(14, 14)
-        user_icon.setPixmap(get_svg_pixmap(LUCIDE_USER_SVG, 14))
-        cg_title = QLabel("로스트아크 직업 설정")
-        cg_title.setStyleSheet("color: #0a84ff; font-weight: bold; font-size: 13px;")
-        cg_title_lay.addWidget(user_icon)
-        cg_title_lay.addWidget(cg_title)
-        cg_title_lay.addStretch()
-        cg_lay.addLayout(cg_title_lay)
-        
+        class_group, cg_lay = build_section_card("직업 설정", LUCIDE_USER_SVG)
+
         self.class_combos = {}
         player = self.parent_window.player_name
-        
+
         p_lay = QHBoxLayout()
-        lbl = QLabel(f"{player}:")
-        lbl.setStyleSheet("font-size: 12px; color: #dddddd;")
-        lbl.setMinimumWidth(80)
-        
+        p_lay.setSpacing(8)
+        lbl = QLabel(player)
+        lbl.setObjectName("FieldLabel")
+        lbl.setMinimumWidth(92)
+
         combo = QComboBox()
         combo.addItems(list(LOST_ARK_CLASSES.keys()))
         default_val = getattr(self.parent_window, 'player_class', "홀리나이트")
         combo.setCurrentText(default_val)
+        combo.setCursor(Qt.CursorShape.PointingHandCursor)
         combo.currentTextChanged.connect(lambda text, p=player: self.change_player_class(p, text))
-        
+
         p_lay.addWidget(lbl)
-        p_lay.addWidget(combo)
+        p_lay.addWidget(combo, 1)
         cg_lay.addLayout(p_lay)
         self.class_combos[player] = combo
-            
+
         container_lay.addWidget(class_group)
-        
-        # Form grid for settings
+
+        # 2. 외형 카드: 테마 / 밀도 / 표시 모드
+        look_card, look_body = build_section_card("외형", LUCIDE_PALETTE_SVG)
         grid = QGridLayout()
-        grid.setSpacing(10)
-        
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(1, 1)
+
         # Theme Preset
-        theme_lbl = QLabel("테마 프리셋:")
-        theme_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
+        theme_lbl = QLabel("테마 프리셋")
+        theme_lbl.setObjectName("FieldLabel")
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(list(THEMES.keys()))
         if self.overlay:
             self.theme_combo.setCurrentText(self.overlay.theme_name)
+        self.theme_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self.theme_combo.currentTextChanged.connect(self.change_theme)
         grid.addWidget(theme_lbl, 0, 0)
         grid.addWidget(self.theme_combo, 0, 1)
-        
+
         # Density Mode (표준 = 카드형, 컴팩트 = 행 단위 테이블형)
-        layout_lbl = QLabel("밀도 모드:")
-        layout_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
+        layout_lbl = QLabel("밀도 모드")
+        layout_lbl.setObjectName("FieldLabel")
         self.layout_combo = QComboBox()
         self.layout_combo.addItems(["표준", "컴팩트"])
         if self.overlay:
             self.layout_combo.setCurrentText(self.overlay.layout_mode)
+        self.layout_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self.layout_combo.currentTextChanged.connect(self.change_layout)
         grid.addWidget(layout_lbl, 1, 0)
         grid.addWidget(self.layout_combo, 1, 1)
-        
+
         # Display Mode
-        display_lbl = QLabel("세부 표시 모드:")
-        display_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
+        display_lbl = QLabel("세부 표시 모드")
+        display_lbl.setObjectName("FieldLabel")
         self.display_combo = QComboBox()
         self.display_combo.addItems(["상세 정보", "아이콘만"])
         if self.overlay:
             self.display_combo.setCurrentText(self.overlay.display_mode)
+        self.display_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self.display_combo.currentTextChanged.connect(self.change_display)
         grid.addWidget(display_lbl, 2, 0)
         grid.addWidget(self.display_combo, 2, 1)
-        
-        container_lay.addLayout(grid)
-        
+
+        look_body.addLayout(grid)
+
         # Click-Through Toggle Row (Moved from main settings dialog)
         self.btn_panel_click_through = QPushButton()
+        self.btn_panel_click_through.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_panel_click_through.clicked.connect(self.toggle_panel_click_through)
         self.update_click_through_button_text()
-        container_lay.addWidget(self.btn_panel_click_through)
-        
-        # Sliders for UI Scale, Opacity, Speed
+        look_body.addWidget(self.btn_panel_click_through)
+        container_lay.addWidget(look_card)
+
+        # 3. 미세 조정 카드: 크기 / 투명도 / 펄스 속도
+        tune_card, tune_body = build_section_card("미세 조정", LUCIDE_SLIDERS_SVG)
+
+        def add_slider_row(caption, value_text):
+            """'라벨 ...... 현재값' 한 행과 그 아래 슬라이더를 만든다."""
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            caption_label = QLabel(caption)
+            caption_label.setObjectName("FieldLabel")
+            value_label = QLabel(value_text)
+            value_label.setObjectName("ValueMono")
+            row.addWidget(caption_label)
+            row.addStretch()
+            row.addWidget(value_label)
+            tune_body.addLayout(row)
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setCursor(Qt.CursorShape.PointingHandCursor)
+            tune_body.addWidget(slider)
+            return slider, value_label
+
         # UI Scale
-        scale_lbl_lay = QHBoxLayout()
-        scale_lbl = QLabel("크기 스케일:")
-        scale_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
-        self.lbl_scale_val = QLabel("1.0x")
-        self.lbl_scale_val.setStyleSheet("font-size: 11px; opacity: 0.6;")
-        scale_lbl_lay.addWidget(scale_lbl)
-        scale_lbl_lay.addStretch()
-        scale_lbl_lay.addWidget(self.lbl_scale_val)
-        container_lay.addLayout(scale_lbl_lay)
-        
-        self.scale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.scale_slider, self.lbl_scale_val = add_slider_row("크기 스케일", "1.0x")
         self.scale_slider.setRange(8, 15)
         if self.overlay:
             self.scale_slider.setValue(int(self.overlay.ui_scale * 10))
             self.lbl_scale_val.setText(f"{self.overlay.ui_scale:.1f}x")
         self.scale_slider.valueChanged.connect(self.change_scale)
-        container_lay.addWidget(self.scale_slider)
-        
+
         # Opacity (Moved from main settings dialog)
-        opacity_lbl_lay = QHBoxLayout()
-        opacity_lbl = QLabel("투명도:")
-        opacity_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
-        self.lbl_opacity_val = QLabel("90%")
-        self.lbl_opacity_val.setStyleSheet("font-size: 11px; opacity: 0.6;")
-        opacity_lbl_lay.addWidget(opacity_lbl)
-        opacity_lbl_lay.addStretch()
-        opacity_lbl_lay.addWidget(self.lbl_opacity_val)
-        container_lay.addLayout(opacity_lbl_lay)
-        
-        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider, self.lbl_opacity_val = add_slider_row("투명도", "90%")
         self.opacity_slider.setRange(20, 100)
         if self.overlay:
             self.opacity_slider.setValue(int(self.overlay.panel_opacity))
             self.lbl_opacity_val.setText(f"{self.overlay.panel_opacity}%")
         self.opacity_slider.valueChanged.connect(self.change_opacity)
-        container_lay.addWidget(self.opacity_slider)
-        
+
         # Ready Dot Speed
-        speed_lbl_lay = QHBoxLayout()
-        speed_lbl = QLabel("Ready 도트 펄스 속도:")
-        speed_lbl.setStyleSheet("font-size: 12px; color: #cccccc;")
-        self.lbl_speed_val = QLabel("1.0x")
-        self.lbl_speed_val.setStyleSheet("font-size: 11px; opacity: 0.6;")
-        speed_lbl_lay.addWidget(speed_lbl)
-        speed_lbl_lay.addStretch()
-        speed_lbl_lay.addWidget(self.lbl_speed_val)
-        container_lay.addLayout(speed_lbl_lay)
-        
-        self.speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self.speed_slider, self.lbl_speed_val = add_slider_row("Ready 도트 펄스 속도", "1.0x")
         self.speed_slider.setRange(5, 20)
         if self.overlay:
             self.speed_slider.setValue(int(self.overlay.speed * 10))
             self.lbl_speed_val.setText(f"{self.overlay.speed:.1f}x")
         self.speed_slider.valueChanged.connect(self.change_speed)
-        container_lay.addWidget(self.speed_slider)
-        
+
+        container_lay.addWidget(tune_card)
+        container_lay.addStretch()
+
         # Close Button
         btn_lay = QHBoxLayout()
         btn_lay.addStretch()
         close_btn = QPushButton("확인")
-        close_btn.setObjectName("CloseBtn")
+        close_btn.setObjectName("PrimaryBtn")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.close_and_save)
         btn_lay.addWidget(close_btn)
         container_lay.addLayout(btn_lay)
-        
+
         layout.addWidget(container)
-        self.resize(320, 520)
+        self.resize(360, 600)
         
         self.drag_position = None
         
@@ -2055,34 +2539,10 @@ class PartyOverlaySettingsModal(QDialog):
     def update_click_through_button_text(self):
         if self.overlay and self.overlay.panel_click_through:
             self.btn_panel_click_through.setText("마우스 투과 상태: 켬")
-            self.btn_panel_click_through.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(48, 209, 88, 0.15);
-                    border: 1px solid rgba(48, 209, 88, 0.35);
-                    border-radius: 8px;
-                    padding: 8px;
-                    font-weight: 600;
-                    color: #30d158;
-                }
-                QPushButton:hover {
-                    background-color: rgba(48, 209, 88, 0.25);
-                }
-            """)
+            apply_widget_tone(self.btn_panel_click_through, "SuccessBtn")
         else:
             self.btn_panel_click_through.setText("마우스 투과 상태: 끔")
-            self.btn_panel_click_through.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(255, 255, 255, 0.05);
-                    border: 1px solid rgba(255, 255, 255, 0.15);
-                    border-radius: 8px;
-                    padding: 8px;
-                    font-weight: 600;
-                    color: #ffffff;
-                }
-                QPushButton:hover {
-                    background-color: rgba(255, 255, 255, 0.10);
-                }
-            """)
+            apply_widget_tone(self.btn_panel_click_through, "")
 
     def change_player_class(self, player, text):
         if self.overlay:
@@ -2166,97 +2626,25 @@ class SettingsModal(QDialog):
         self.pending_lookup_name = ""
 
         
-        self.setStyleSheet("""
-            #ModalContainer {
-                background-color: rgba(28, 28, 30, 0.96);
-                border: 1.5px solid rgba(255, 255, 255, 0.15);
-                border-radius: 16px;
-            }
-            QLabel {
-                color: #ffffff;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            }
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.08);
-                color: #ffffff;
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 12px;
-                padding: 6px 14px;
-                font-size: 12px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.16);
-            }
-            QPushButton#SaveBtn {
-                background-color: #0066cc;
-                border: none;
-                font-weight: 600;
-            }
-            QPushButton#SaveBtn:hover {
-                background-color: #0071e3;
-            }
-            QLineEdit {
-                background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-                color: #ffffff;
-                padding: 4px 8px;
-                font-size: 12px;
-            }
-            QCheckBox {
-                color: #ffffff;
-                font-size: 12px;
-            }
-            QTabWidget::pane {
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-                background: transparent;
-            }
-            QTabBar::tab {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-bottom-color: none;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                padding: 6px 16px;
-                color: #cccccc;
-                font-size: 12px;
-            }
-            QTabBar::tab:selected {
-                background: rgba(255, 255, 255, 0.12);
-                color: #ffffff;
-                border-bottom-color: rgba(28, 28, 30, 0.96);
-            }
-            QListWidget {
-                background-color: rgba(255, 255, 255, 0.03);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-                color: #ffffff;
-            }
-        """)
-        
+        self.setStyleSheet(get_modal_style())
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
         container = QFrame()
         container.setObjectName("ModalContainer")
         container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(20, 20, 20, 20)
+        container_layout.setContentsMargins(20, 16, 20, 18)
         container_layout.setSpacing(14)
         
-        # Header Row
-        title_layout_row = QHBoxLayout()
-        title_layout_row.setSpacing(8)
-        title_layout_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_icon = QLabel()
-        title_icon.setFixedSize(20, 20)
-        title_icon.setPixmap(get_svg_icon(LUCIDE_SETTINGS_SVG).pixmap(20, 20))
-        title_label = QLabel("설정 및 쿨타임 동기화")
-        title_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #ffffff;")
-        title_layout_row.addWidget(title_icon)
-        title_layout_row.addWidget(title_label)
-        container_layout.addLayout(title_layout_row)
+        # 헤더: 좌측 정렬 타이틀 + 닫기. 메인 창 타이틀바와 같은 문법.
+        header, _ = build_modal_header(
+            "설정 및 쿨타임 동기화",
+            f"PENGU ZOOM PRO {APP_VERSION}",
+            on_close=self.save_and_close,
+        )
+        container_layout.addWidget(header)
+        container_layout.addWidget(build_divider())
         
         # Tab Control
         self.tabs = QTabWidget()
@@ -2295,58 +2683,63 @@ class SettingsModal(QDialog):
 
     def setup_hotkeys_tab(self, tab):
         lay = QVBoxLayout(tab)
-        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setContentsMargins(2, 14, 2, 2)
         lay.setSpacing(12)
-        
-        grid = QGridLayout()
-        grid.setSpacing(10)
-        
+
         self.temp_follow = self.parent_window.hotkey_follow
         self.temp_transparent = self.parent_window.hotkey_transparent
         self.temp_hide = self.parent_window.hotkey_hide
-        
-        # 1. Follow Hotkey
-        lbl_follow = QLabel("마우스 따라오기:")
-        lbl_follow.setStyleSheet("font-size: 13px; color: #cccccc;")
+
+        # 단축키 카드: 라벨 + 값 버튼을 한 행으로 정렬한다. 값 버튼은 입력창처럼
+        # 보이게 해서 '누르면 바뀌는 값'임을 드러낸다.
+        hotkey_card, hotkey_body = build_section_card("단축키", LUCIDE_SLIDERS_SVG)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(1, 1)
+
         self.btn_follow = QPushButton(self.get_display_text(self.temp_follow, "Ctrl+MiddleClick"))
-        self.btn_follow.clicked.connect(lambda: self.start_setting("follow", self.btn_follow))
-        grid.addWidget(lbl_follow, 0, 0)
-        grid.addWidget(self.btn_follow, 0, 1)
-        
-        # 2. Transparent (Click-through) Hotkey
-        lbl_trans = QLabel("마우스 투과 토글:")
-        lbl_trans.setStyleSheet("font-size: 13px; color: #cccccc;")
         self.btn_transparent = QPushButton(self.get_display_text(self.temp_transparent, "Ctrl+Alt+T"))
-        self.btn_transparent.clicked.connect(lambda: self.start_setting("transparent", self.btn_transparent))
-        grid.addWidget(lbl_trans, 1, 0)
-        grid.addWidget(self.btn_transparent, 1, 1)
-        
-        # 3. Minimize Window Hotkey
-        lbl_hide = QLabel("최소화(가리기) 토글:")
-        lbl_hide.setStyleSheet("font-size: 13px; color: #cccccc;")
         self.btn_hide = QPushButton(self.get_display_text(self.temp_hide, "Ctrl+Alt+H"))
-        self.btn_hide.clicked.connect(lambda: self.start_setting("hide", self.btn_hide))
-        grid.addWidget(lbl_hide, 2, 0)
-        grid.addWidget(self.btn_hide, 2, 1)
-        
-        lay.addLayout(grid)
-        
-        # Divider Line
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
-        line.setStyleSheet("background-color: rgba(255,255,255,0.06);")
-        lay.addWidget(line)
-        
-        # UI Hiding Toggle Option (Newly Requested Feature)
-        self.chk_hide_ui_on_transparent = QCheckBox("마우스 투과(On) 시 모든 제어 UI 숨기기")
+
+        rows = (
+            ("마우스 따라오기", self.btn_follow, "follow"),
+            ("마우스 투과 토글", self.btn_transparent, "transparent"),
+            ("최소화(가리기) 토글", self.btn_hide, "hide"),
+        )
+        for row_index, (caption, button, target) in enumerate(rows):
+            label = QLabel(caption)
+            label.setObjectName("FieldLabel")
+            button.setObjectName("KeyBtn")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setToolTip("클릭 후 원하는 키 조합을 누르세요 (ESC = 기본값)")
+            button.clicked.connect(
+                lambda _checked=False, t=target, b=button: self.start_setting(t, b))
+            grid.addWidget(label, row_index, 0)
+            grid.addWidget(button, row_index, 1)
+
+        hotkey_body.addLayout(grid)
+        lay.addWidget(hotkey_card)
+
+        # 표시 옵션 카드
+        display_card, display_body = build_section_card("표시 옵션", LUCIDE_EYE_SVG)
+        self.chk_hide_ui_on_transparent = QCheckBox("마우스 투과 시 모든 제어 UI 숨기기")
         self.chk_hide_ui_on_transparent.setChecked(self.parent_window.hide_ui_on_transparent)
-        lay.addWidget(self.chk_hide_ui_on_transparent)
-        
-        info = QLabel("※ 단축키 지정 대기 상태에서 ESC를 누르면 마우스 기본 설정(휠 클릭 리셋 등)으로 해제됨 애옹! 투과 UI 숨기기 옵션을 켜면, 마우스 투과 상태에서 버튼이랑 슬라이더 영역이 자동 가려져 깔끔한 화면만 떠있게 됨 애옹!")
-        info.setStyleSheet("font-size: 11px; color: rgba(255, 255, 255, 0.4); line-height: 1.4;")
-        info.setWordWrap(True)
-        lay.addWidget(info)
+        self.chk_hide_ui_on_transparent.setCursor(Qt.CursorShape.PointingHandCursor)
+        display_body.addWidget(self.chk_hide_ui_on_transparent)
+
+        hint = QLabel(
+            "켜면 마우스 투과 상태에서 버튼과 슬라이더가 자동으로 숨겨져 "
+            "확대 화면만 남습니다.")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        display_body.addWidget(hint)
+        lay.addWidget(display_card)
+
+        tip = QLabel("단축키 지정 대기 중 ESC를 누르면 기본값으로 되돌립니다.")
+        tip.setObjectName("Hint")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
         lay.addStretch()
 
     def get_display_text(self, val, fallback):
@@ -2354,141 +2747,111 @@ class SettingsModal(QDialog):
 
     def start_setting(self, target, button):
         self.is_setting_target = target
-        button.setText("키 입력 대기 중...")
-        button.setStyleSheet("background-color: rgba(0, 102, 204, 0.4); border-color: #0066cc;")
+        button.setText("키 입력 대기 중…")
+        # 인라인 QSS 대신 objectName을 바꿔 공용 스타일의 armed 규칙을 적용한다.
+        apply_widget_tone(button, "KeyBtnArmed")
+
+    def _reset_hotkey_button_styles(self):
+        """키 지정이 끝난 버튼들을 기본 KeyBtn 외형으로 되돌린다."""
+        for button in (self.btn_follow, self.btn_transparent, self.btn_hide):
+            apply_widget_tone(button, "KeyBtn")
 
     def setup_skills_tab(self, tab):
         lay = QVBoxLayout(tab)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.setSpacing(10)
-        
+        lay.setContentsMargins(2, 14, 2, 2)
+        lay.setSpacing(12)
+
+        # 액션 행: 주 동작(스킬 추가)만 액센트, 파괴적 동작(삭제)만 위험색.
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
         self.add_skill_btn = QPushButton("스킬 추가")
+        self.add_skill_btn.setObjectName("PrimaryBtn")
+        self.add_skill_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.add_skill_btn.clicked.connect(self.add_new_skill_slot)
         btn_row.addWidget(self.add_skill_btn)
-        
-        self.cap_area_btn = QPushButton("영역 지정")
+
+        self.cap_area_btn = QPushButton("Ready 영역 지정")
+        self.cap_area_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cap_area_btn.clicked.connect(self.capture_selected_skill_area)
         btn_row.addWidget(self.cap_area_btn)
-        
+
         self.del_skill_btn = QPushButton("삭제")
+        self.del_skill_btn.setObjectName("DangerBtn")
+        self.del_skill_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.del_skill_btn.clicked.connect(self.delete_selected_skill)
         btn_row.addWidget(self.del_skill_btn)
-        
+
+        btn_row.addStretch()
         lay.addLayout(btn_row)
-        
-        # Horizontal layout to split list and preview panel
-        list_preview_lay = QHBoxLayout()
-        list_preview_lay.setSpacing(10)
-        
+
+        # 좌: 등록된 스킬 목록 / 우: 선택한 스킬의 상세 설정
+        split = QHBoxLayout()
+        split.setSpacing(10)
+
+        list_card, list_body = build_section_card("감지 스킬", LUCIDE_LAYOUT_SVG)
         self.skill_list = QListWidget()
+        self.skill_list.setCursor(Qt.CursorShape.PointingHandCursor)
         self.skill_list.currentRowChanged.connect(self.on_skill_selection_changed)
-        list_preview_lay.addWidget(self.skill_list, 3) # Ratio 3
-        
-        # Preview Frame for captured template image
-        self.preview_box = QFrame()
-        self.preview_box.setStyleSheet("""
-            QFrame {
-                background-color: rgba(255, 255, 255, 0.03);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-            }
-            QLabel {
-                border: none;
-                background: transparent;
-            }
-        """)
-        preview_lay = QVBoxLayout(self.preview_box)
-        preview_lay.setContentsMargins(8, 8, 8, 8)
-        preview_lay.setSpacing(6)
-        preview_lay.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-        
-        lbl_preview_title = QLabel("Ready 스냅샷")
-        lbl_preview_title.setStyleSheet("font-size: 11px; font-weight: bold; color: #aaaaaa;")
-        lbl_preview_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        preview_lay.addWidget(lbl_preview_title)
-        
-        self.lbl_skill_img = QLabel("스냅샷 없음\n(영역 지정 필요)")
-        self.lbl_skill_img.setFixedSize(96, 96)
+        list_body.addWidget(self.skill_list)
+        split.addWidget(list_card, 3)
+
+        detail_card, detail_body = build_section_card("선택한 스킬", LUCIDE_SLIDERS_SVG)
+        self.preview_box = detail_card
+
+        # Ready 스냅샷 미리보기
+        snap_label = QLabel("Ready 스냅샷")
+        snap_label.setObjectName("FieldLabel")
+        detail_body.addWidget(snap_label)
+
+        self.lbl_skill_img = QLabel("스냅샷 없음\n영역 지정이 필요합니다")
+        self.lbl_skill_img.setFixedHeight(104)
         self.lbl_skill_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_skill_img.setStyleSheet("""
-            QLabel {
-                background-color: rgba(0, 0, 0, 0.4);
-                border: 1px dashed rgba(255, 255, 255, 0.15);
-                border-radius: 6px;
-                color: rgba(255, 255, 255, 0.3);
-                font-size: 10px;
-            }
-        """)
         self.lbl_skill_img.setWordWrap(True)
-        preview_lay.addWidget(self.lbl_skill_img)
-        
-        # Cooldown duration spinbox UI
-        cooldown_lbl = QLabel("쿨타임 설정(초)")
-        cooldown_lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #aaaaaa; margin-top: 10px;")
-        cooldown_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        preview_lay.addWidget(cooldown_lbl)
-        
+        self.lbl_skill_img.setStyleSheet(SNAPSHOT_PLACEHOLDER_STYLE)
+        detail_body.addWidget(self.lbl_skill_img)
+
+        # 쿨타임(초)
+        cooldown_label = QLabel("쿨타임 (초)")
+        cooldown_label.setObjectName("FieldLabel")
+        detail_body.addWidget(cooldown_label)
+
         self.spin_cooldown = QSpinBox()
         self.spin_cooldown.setRange(0, 3600)
         self.spin_cooldown.setSuffix(" 초")
         self.spin_cooldown.setValue(0)
-        self.spin_cooldown.setStyleSheet("""
-            QSpinBox {
-                background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 6px;
-                color: #ffffff;
-                padding: 4px;
-                font-size: 12px;
-                font-weight: 500;
-            }
-        """)
         self.spin_cooldown.valueChanged.connect(self.on_cooldown_value_changed)
-        preview_lay.addWidget(self.spin_cooldown)
-        
-        # Trigger key UI
-        trigger_lbl = QLabel("트리거 단축키 (예: f)")
-        trigger_lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #aaaaaa; margin-top: 10px;")
-        trigger_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        preview_lay.addWidget(trigger_lbl)
-        
+        detail_body.addWidget(self.spin_cooldown)
+
+        # 트리거 키
+        trigger_label = QLabel("트리거 단축키")
+        trigger_label.setObjectName("FieldLabel")
+        detail_body.addWidget(trigger_label)
+
         self.txt_trigger_key = QLineEdit()
-        self.txt_trigger_key.setStyleSheet("""
-            QLineEdit {
-                background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 6px;
-                color: #ffffff;
-                padding: 4px;
-                font-size: 12px;
-                font-weight: 500;
-            }
-        """)
         self.txt_trigger_key.setMaxLength(10)
-        self.txt_trigger_key.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.txt_trigger_key.setPlaceholderText("예: f")
         self.txt_trigger_key.textChanged.connect(self.on_trigger_key_changed)
-        preview_lay.addWidget(self.txt_trigger_key)
-        
-        list_preview_lay.addWidget(self.preview_box, 2) # Ratio 2
-        lay.addLayout(list_preview_lay)
-        
+        detail_body.addWidget(self.txt_trigger_key)
+
+        detail_body.addStretch()
+        split.addWidget(detail_card, 2)
+        lay.addLayout(split)
+
         # Populate existing slots
         self.refresh_skill_list()
-        
-        self.lbl_selected_status = QLabel("선택된 스킬 없음 (Ready 스냅샷을 지정해 주셔야 활성화 판별이 시작됩니다.)")
-        self.lbl_selected_status.setStyleSheet("font-size: 11px; color: #ffd60a;")
+
+        self.lbl_selected_status = QLabel(
+            "선택된 스킬 없음 · Ready 스냅샷을 지정하면 활성화 판별이 시작됩니다")
+        self.lbl_selected_status.setObjectName("StatusWarn")
         self.lbl_selected_status.setWordWrap(True)
         lay.addWidget(self.lbl_selected_status)
 
         manual_notice = QLabel(
-            "남은 쿨타임은 입력한 초와 트리거 단축키로 계산합니다. "
-            "Ready 판정은 저장된 스킬 스냅샷을 사용합니다."
-        )
+            "남은 쿨타임은 입력한 초와 트리거 단축키로 계산하고, "
+            "Ready 판정은 저장된 스냅샷을 사용합니다.")
+        manual_notice.setObjectName("Hint")
         manual_notice.setWordWrap(True)
-        manual_notice.setStyleSheet(
-            "font-size: 10px; color: rgba(255,255,255,0.55);"
-        )
         lay.addWidget(manual_notice)
 
     def setup_ocr_tab(self, tab):
@@ -2815,191 +3178,115 @@ class SettingsModal(QDialog):
 
     def setup_network_tab(self, tab):
         lay = QVBoxLayout(tab)
-        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setContentsMargins(2, 14, 2, 2)
         lay.setSpacing(12)
-        
-        # 1. Main Configuration Box
-        config_box = QFrame()
-        config_box.setStyleSheet("""
-            QFrame {
-                background-color: rgba(48, 209, 88, 0.04); 
-                border: 1px solid rgba(48, 209, 88, 0.18); 
-                border-radius: 12px; 
-                padding: 14px;
-            }
-        """)
-        config_lay = QVBoxLayout(config_box)
-        config_lay.setContentsMargins(12, 12, 12, 12)
-        config_lay.setSpacing(12)
-        
-        title_lay = QHBoxLayout()
-        title_lay.setSpacing(6)
-        join_icon = QLabel()
-        join_icon.setFixedSize(18, 18)
-        join_icon.setScaledContents(True)
-        join_icon.setStyleSheet("border: none; background: transparent; padding: 0px; margin: 0px;")
-        join_icon.setPixmap(get_svg_pixmap(LUCIDE_JOIN_SVG, 18))
-        title_lbl = QLabel("<b>파티 쿨타임 공유 연결</b>")
-        title_lbl.setStyleSheet("color: #30d158; font-size: 14px; font-weight: 600; border: none; background: transparent;")
-        title_lay.addWidget(join_icon)
-        title_lay.addWidget(title_lbl)
-        title_lay.addStretch()
-        config_lay.addLayout(title_lay)
-        
-        # Character Name Row
+
+        # 1. 내 캐릭터 카드
+        me_card, me_body = build_section_card("내 캐릭터", LUCIDE_USER_SVG)
+
         char_row = QHBoxLayout()
-        char_lbl = QLabel("캐릭터명:")
-        char_lbl.setStyleSheet("font-weight: bold; font-size: 13px; border: none; background: transparent; color: #cccccc;")
+        char_row.setSpacing(8)
+        char_lbl = QLabel("캐릭터명")
+        char_lbl.setObjectName("FieldLabel")
+        char_lbl.setFixedWidth(104)
         char_row.addWidget(char_lbl)
+
         self.txt_char_name = QLineEdit(self.parent_window.player_name)
-        self.txt_char_name.setStyleSheet("""
-            QLineEdit {
-                background-color: rgba(255, 255, 255, 0.06);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 8px;
-                color: #ffffff;
-                padding: 6px 10px;
-                font-size: 13px;
-            }
-        """)
-        char_row.addWidget(self.txt_char_name)
+        self.txt_char_name.setPlaceholderText("로스트아크 캐릭터명")
+        self.txt_char_name.editingFinished.connect(self.lookup_character_class)
+        char_row.addWidget(self.txt_char_name, 1)
+
         self.btn_lookup_character = QPushButton("직업 자동 감지")
-        self.btn_lookup_character.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(10, 132, 255, 0.12);
-                border: 1px solid rgba(10, 132, 255, 0.28);
-                border-radius: 8px;
-                color: #64a8ff;
-                padding: 6px 10px;
-                font-size: 12px;
-                font-weight: 600;
-            }
-            QPushButton:hover { background-color: rgba(10, 132, 255, 0.22); }
-            QPushButton:disabled { color: #777777; background-color: rgba(255, 255, 255, 0.04); }
-        """)
+        self.btn_lookup_character.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_lookup_character.clicked.connect(self.lookup_character_class)
         char_row.addWidget(self.btn_lookup_character)
-        config_lay.addLayout(char_row)
+        me_body.addLayout(char_row)
 
         self.lbl_character_lookup = QLabel(
-            f"현재 직업: {getattr(self.parent_window, 'player_class', '홀리나이트')} · 캐릭터명 입력 후 자동 감지"
-        )
-        self.lbl_character_lookup.setStyleSheet(
-            "color: #8e8e93; border: none; background: transparent; font-size: 12px; padding-left: 2px;"
-        )
-        config_lay.addWidget(self.lbl_character_lookup)
-        self.txt_char_name.editingFinished.connect(self.lookup_character_class)
+            f"현재 직업: {getattr(self.parent_window, 'player_class', '홀리나이트')}"
+            " · 캐릭터명 입력 후 자동 감지")
+        self.lbl_character_lookup.setObjectName("Hint")
+        self.lbl_character_lookup.setWordWrap(True)
+        me_body.addWidget(self.lbl_character_lookup)
+        lay.addWidget(me_card)
 
-        # Room ID Row
+        # 2. 방 연결 카드
+        room_card, room_body = build_section_card("파티 방 연결", LUCIDE_JOIN_SVG)
+
         room_row = QHBoxLayout()
-        room_lbl = QLabel("방 코드 (Room ID):")
-        room_lbl.setStyleSheet("font-weight: bold; font-size: 13px; border: none; background: transparent; color: #cccccc;")
+        room_row.setSpacing(8)
+        room_lbl = QLabel("방 코드")
+        room_lbl.setObjectName("FieldLabel")
+        room_lbl.setFixedWidth(104)
         room_row.addWidget(room_lbl)
-        room_val = getattr(self.parent_window, "room_id", "default")
-        self.txt_room_id = QLineEdit(room_val)
-        self.txt_room_id.setStyleSheet("""
-            QLineEdit {
-                background-color: rgba(255, 255, 255, 0.06);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 8px;
-                color: #ffffff;
-                padding: 6px 10px;
-                font-size: 13px;
-            }
-        """)
-        room_row.addWidget(self.txt_room_id)
-        config_lay.addLayout(room_row)
+        self.txt_room_id = QLineEdit(getattr(self.parent_window, "room_id", "default"))
+        self.txt_room_id.setPlaceholderText("파티원과 동일하게 입력")
+        room_row.addWidget(self.txt_room_id, 1)
+        room_body.addLayout(room_row)
 
-        # Server URL Row (Bypassed but kept for flexibility)
-        ip_row = QHBoxLayout()
-        ip_lbl = QLabel("서버 주소 (URL):")
-        ip_lbl.setStyleSheet("border: none; background: transparent; font-size: 12px; color: #888888;")
-        ip_row.addWidget(ip_lbl)
+        url_row = QHBoxLayout()
+        url_row.setSpacing(8)
+        url_lbl = QLabel("릴레이 서버")
+        url_lbl.setObjectName("FieldLabel")
+        url_lbl.setFixedWidth(104)
+        url_row.addWidget(url_lbl)
         self.txt_host_url = QLineEdit(self.parent_window.server_url)
-        self.txt_host_url.setStyleSheet("""
-            QLineEdit {
-                background-color: rgba(255, 255, 255, 0.03);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 8px;
-                color: #aaaaaa;
-                padding: 4px 8px;
-                font-size: 12px;
-            }
-        """)
         self.txt_host_url.setReadOnly(True)
-        ip_row.addWidget(self.txt_host_url)
-        config_lay.addLayout(ip_row)
+        self.txt_host_url.setToolTip("고정 릴레이 서버입니다")
+        url_row.addWidget(self.txt_host_url, 1)
+        room_body.addLayout(url_row)
 
-        # Connection status row
+        room_body.addWidget(build_divider())
+
+        # 접속 상태 행: 버튼 + 연결 아이콘 + 상태 문구
         conn_row = QHBoxLayout()
-        conn_row.setContentsMargins(0, 0, 0, 0)
-        conn_row.setSpacing(10)
+        conn_row.setSpacing(9)
         self.btn_toggle_client = QPushButton("방 접속하기")
-        self.btn_toggle_client.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(48, 209, 88, 0.15);
-                border: 1px solid rgba(48, 209, 88, 0.3);
-                border-radius: 8px;
-                padding: 6px 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(48, 209, 88, 0.25);
-            }
-        """)
+        self.btn_toggle_client.setObjectName("PrimaryBtn")
+        self.btn_toggle_client.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_toggle_client.clicked.connect(self.toggle_client_connection)
         conn_row.addWidget(self.btn_toggle_client, 0, Qt.AlignmentFlag.AlignVCenter)
-        
+
         self.lbl_client_icon = QLabel()
         self.lbl_client_icon.setFixedSize(16, 16)
         self.lbl_client_icon.setScaledContents(True)
-        self.lbl_client_icon.setStyleSheet("border: none; background: transparent; padding: 0px; margin: 0px;")
         self.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_UNLINKED_SVG, 16))
         conn_row.addWidget(self.lbl_client_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        
-        self.lbl_client_status = QLabel("접속 상태: 대기")
-        self.lbl_client_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent; font-size: 13px;")
+
+        self.lbl_client_status = QLabel("대기 중")
+        self.lbl_client_status.setObjectName("StatusIdle")
         conn_row.addWidget(self.lbl_client_status, 0, Qt.AlignmentFlag.AlignVCenter)
         conn_row.addStretch()
-        config_lay.addLayout(conn_row)
-        
-        lay.addWidget(config_box)
-        
-        # Party Panel Show Toggle
+        room_body.addLayout(conn_row)
+        lay.addWidget(room_card)
+
+        # 3. 파티 현황판 카드
+        hud_card, hud_body = build_section_card("파티 현황판", LUCIDE_LAYOUT_SVG)
+
+        hud_row = QHBoxLayout()
+        hud_row.setSpacing(8)
         self.btn_show_panel = QPushButton("파티 현황 켜기")
-        self.btn_show_panel.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                border-radius: 10px;
-                padding: 8px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.16);
-            }
-        """)
+        self.btn_show_panel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_show_panel.clicked.connect(self.toggle_party_panel_visible)
-        lay.addWidget(self.btn_show_panel)
-        
-        # Party Panel Settings Button
-        self.btn_party_settings = QPushButton("파티 현황 설정")
-        self.btn_party_settings.setIcon(get_svg_icon(LUCIDE_SETTINGS_SVG))
-        self.btn_party_settings.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(10, 132, 255, 0.08);
-                border: 1px solid rgba(10, 132, 255, 0.20);
-                border-radius: 10px;
-                padding: 8px;
-                font-weight: 600;
-                color: #0a84ff;
-            }
-            QPushButton:hover {
-                background-color: rgba(10, 132, 255, 0.18);
-            }
-        """)
+        hud_row.addWidget(self.btn_show_panel, 1)
+
+        self.btn_party_settings = QPushButton("디자인 설정")
+        self.btn_party_settings.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_party_settings.setIcon(
+            get_svg_icon(recolor_svg_stroke(LUCIDE_PALETTE_SVG, "#c7c7cc")))
+        self.btn_party_settings.setIconSize(QSize(13, 13))
         self.btn_party_settings.clicked.connect(self.open_party_design_settings)
-        lay.addWidget(self.btn_party_settings)
-        
+        hud_row.addWidget(self.btn_party_settings, 1)
+        hud_body.addLayout(hud_row)
+
+        hud_hint = QLabel(
+            "현황판은 마우스로 옮기고 네 변·네 모서리에서 크기를 조절할 수 있습니다. "
+            "마우스 투과를 켜면 클릭이 게임으로 전달됩니다.")
+        hud_hint.setObjectName("Hint")
+        hud_hint.setWordWrap(True)
+        hud_body.addWidget(hud_hint)
+        lay.addWidget(hud_card)
+
         self.update_network_tab_texts()
         lay.addStretch()
 
@@ -3054,11 +3341,49 @@ class SettingsModal(QDialog):
         self.parent_window.start_cooldown_area_capture(curr.text(), self)
 
     def on_skill_selection_changed(self, row):
+        return self._refresh_selected_skill_detail()
+
+    def _set_snapshot_placeholder(self, text):
+        """스냅샷이 없을 때: 점선 테두리 + 안내 문구."""
+        self.lbl_skill_img.setPixmap(QPixmap())
+        self.lbl_skill_img.setText(text)
+        self.lbl_skill_img.setStyleSheet(SNAPSHOT_PLACEHOLDER_STYLE)
+
+    def _set_snapshot_pixmap(self, pixmap):
+        """스냅샷이 있을 때: 실선(성공색) 테두리 + 이미지."""
+        self.lbl_skill_img.setText("")
+        self.lbl_skill_img.setStyleSheet(SNAPSHOT_FILLED_STYLE)
+        self.lbl_skill_img.setPixmap(pixmap.scaled(
+            self.lbl_skill_img.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+
+    def _set_selected_status(self, text, tone="StatusIdle"):
+        """상태 문구와 색조(정상/주의/대기)를 함께 바꾼다."""
+        self.lbl_selected_status.setText(text)
+        apply_widget_tone(self.lbl_selected_status, tone)
+
+    @staticmethod
+    def _template_to_pixmap(template):
+        """탐지기 템플릿(numpy)을 QPixmap으로 변환한다. 실패 시 None."""
+        try:
+            height, width = template.shape[:2]
+            if template.ndim == 3:
+                image = QImage(template.data.tobytes(), width, height,
+                               width * 3, QImage.Format.Format_RGB888)
+            else:
+                image = QImage(template.data.tobytes(), width, height,
+                               width, QImage.Format.Format_Grayscale8)
+            return QPixmap.fromImage(image)
+        except Exception:
+            return None
+
+    def _refresh_selected_skill_detail(self):
         curr = self.skill_list.currentItem()
         if not curr:
-            self.lbl_selected_status.setText("선택된 스킬 없음")
-            self.lbl_skill_img.setText("스냅샷 없음\n(영역 지정 필요)")
-            self.lbl_skill_img.setPixmap(QPixmap())
+            self._set_selected_status(
+                "선택된 스킬 없음 · 목록에서 스킬을 고르세요", "StatusIdle")
+            self._set_snapshot_placeholder("스냅샷 없음\n영역 지정이 필요합니다")
             self.spin_cooldown.setEnabled(False)
             self.spin_cooldown.blockSignals(True)
             self.spin_cooldown.setValue(0)
@@ -3086,48 +3411,25 @@ class SettingsModal(QDialog):
             self.txt_trigger_key.blockSignals(True)
             self.txt_trigger_key.setText(slot.trigger_key if slot.trigger_key else "")
             self.txt_trigger_key.blockSignals(False)
-            
-            status = "좌표: 지정 완료" if slot.rect else "좌표: 미지정"
-            has_template = " Ready 스냅샷: 있음" if slot.template is not None else " Ready 스냅샷: 없음 (영역 지정 필요)"
-            self.lbl_selected_status.setText(f"[{name}] {status} | {has_template}")
-            
-            # Show visual snapshot preview if available (Prefer color snapshot)
-            if slot.template_color is not None:
-                try:
-                    # Convert 3D RGB numpy array (uint8) to QImage (w * 3 bytes per line)
-                    h, w = slot.template_color.shape[:2]
-                    qimg = QImage(slot.template_color.data.tobytes(), w, h, w * 3, QImage.Format.Format_RGB888)
-                    pixmap = QPixmap.fromImage(qimg)
-                    
-                    # Smoothly scale to fit inside our 96x96 QLabel keeping aspect ratio
-                    scaled_pixmap = pixmap.scaled(
-                        self.lbl_skill_img.size(),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
-                    self.lbl_skill_img.setPixmap(scaled_pixmap)
-                except Exception:
-                    self.lbl_skill_img.setText("이미지 로드 실패")
-                    self.lbl_skill_img.setPixmap(QPixmap())
-            elif slot.template is not None:
-                try:
-                    # Fallback: Convert 2D grayscale numpy array (uint8) to QImage
-                    h, w = slot.template.shape[:2]
-                    qimg = QImage(slot.template.data.tobytes(), w, h, w, QImage.Format.Format_Grayscale8)
-                    pixmap = QPixmap.fromImage(qimg)
-                    
-                    scaled_pixmap = pixmap.scaled(
-                        self.lbl_skill_img.size(),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
-                    self.lbl_skill_img.setPixmap(scaled_pixmap)
-                except Exception:
-                    self.lbl_skill_img.setText("이미지 로드 실패")
-                    self.lbl_skill_img.setPixmap(QPixmap())
-            else:
-                self.lbl_skill_img.setText("스냅샷 없음\n(영역 지정 필요)")
-                self.lbl_skill_img.setPixmap(QPixmap())
+
+            template = (slot.template_color
+                        if slot.template_color is not None else slot.template)
+            if template is None:
+                self._set_selected_status(
+                    f"{name} · Ready 스냅샷이 없어 감지가 시작되지 않습니다", "StatusWarn")
+                self._set_snapshot_placeholder("스냅샷 없음\n영역 지정이 필요합니다")
+                return
+
+            pixmap = self._template_to_pixmap(template)
+            if pixmap is None:
+                self._set_selected_status(f"{name} · 스냅샷 로드 실패", "StatusError")
+                self._set_snapshot_placeholder("이미지 로드 실패")
+                return
+
+            self._set_snapshot_pixmap(pixmap)
+            coords = "좌표 지정 완료" if slot.rect else "좌표 미지정"
+            tone = "StatusOk" if slot.rect else "StatusWarn"
+            self._set_selected_status(f"{name} · {coords} · 스냅샷 있음", tone)
 
     def on_cooldown_value_changed(self, val):
         curr = self.skill_list.currentItem()
@@ -3205,9 +3507,7 @@ class SettingsModal(QDialog):
         self.btn_lookup_character.setEnabled(False)
         self.btn_lookup_character.setText("확인 중...")
         self.lbl_character_lookup.setText("로스트아크에서 캐릭터 직업을 확인하는 중...")
-        self.lbl_character_lookup.setStyleSheet(
-            "color: #0a84ff; border: none; background: transparent; font-size: 12px; padding-left: 2px;"
-        )
+        self._set_lookup_tone("StatusInfo")
         self.parent_window.request_character_profile(char_name, url)
 
     def on_character_lookup_succeeded(self, profile):
@@ -3226,9 +3526,7 @@ class SettingsModal(QDialog):
         server_name = profile.get("server_name", "")
         suffix = f" · {server_name}" if server_name else ""
         self.lbl_character_lookup.setText(f"직업 자동 설정 완료: {class_name}{suffix}")
-        self.lbl_character_lookup.setStyleSheet(
-            "color: #30d158; border: none; background: transparent; font-size: 12px; font-weight: 600; padding-left: 2px;"
-        )
+        self._set_lookup_tone("StatusOk")
         if should_connect:
             self._start_client_connection()
 
@@ -3236,9 +3534,7 @@ class SettingsModal(QDialog):
         if not self.character_lookup_in_progress:
             return
         self.lbl_character_lookup.setText(str(message))
-        self.lbl_character_lookup.setStyleSheet(
-            "color: #ffd60a; border: none; background: transparent; font-size: 12px; padding-left: 2px;"
-        )
+        self._set_lookup_tone("Hint")
 
     def on_character_lookup_failed(self, requested_name, message):
         if requested_name.casefold() != self.pending_lookup_name.casefold():
@@ -3251,21 +3547,37 @@ class SettingsModal(QDialog):
         self.btn_lookup_character.setEnabled(True)
         self.btn_lookup_character.setText("다시 시도")
         self.lbl_character_lookup.setText(f"자동 감지 실패: {message} 수동 설정 직업을 사용합니다.")
-        self.lbl_character_lookup.setStyleSheet(
-            "color: #ff9f0a; border: none; background: transparent; font-size: 12px; padding-left: 2px;"
-        )
+        self._set_lookup_tone("StatusWarn")
         if should_connect:
             self._start_client_connection()
+
+    def _set_client_status(self, text, tone="StatusIdle"):
+        """접속 상태 문구와 색조를 공용 스타일 규칙으로 바꾼다."""
+        self.lbl_client_status.setText(text)
+        apply_widget_tone(self.lbl_client_status, tone)
+
+    def _apply_client_status_tone(self, tone):
+        """접속 상태 라벨의 색조만 바꾼다(문구는 호출부에서 이미 설정한 상태)."""
+        apply_widget_tone(self.lbl_client_status, tone)
+
+    def _set_lookup_tone(self, tone):
+        """직업 자동 감지 안내 라벨의 색조만 바꾼다.
+
+        진행 중(StatusInfo) / 성공(StatusOk) / 경고(StatusWarn) / 보조설명(Hint)
+        네 가지를 쓴다.
+        """
+        apply_widget_tone(self.lbl_character_lookup, tone)
 
     def update_network_tab_texts(self):
         if self.parent_window.client_running:
             self.btn_toggle_client.setText("접속 끊기")
+            apply_widget_tone(self.btn_toggle_client, "DangerBtn")
         else:
             self.btn_toggle_client.setText("방 접속하기")
-            self.lbl_client_status.setText("접속 상태: 대기")
-            self.lbl_client_status.setStyleSheet("color: #aaaaaa; border: none; background: transparent; font-size: 13px;")
+            apply_widget_tone(self.btn_toggle_client, "PrimaryBtn")
+            self._set_client_status("대기 중", "StatusIdle")
             self.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_UNLINKED_SVG, 16))
-            
+
         if self.parent_window.party_panel.isVisible():
             self.btn_show_panel.setText("파티 현황 끄기")
         else:
@@ -3335,7 +3647,7 @@ class SettingsModal(QDialog):
         self.lbl_client_icon.setVisible(True)
         self.spinner_timer.start(30)
         self.lbl_client_status.setText("동기화 연결 중...")
-        self.lbl_client_status.setStyleSheet("color: #0a84ff; font-weight: 600; border: none; background: transparent; font-size: 13px;")
+        self._apply_client_status_tone("StatusInfo")
         self.parent_window.start_party_client()
         self.update_network_tab_texts()
 
@@ -3395,9 +3707,7 @@ class SettingsModal(QDialog):
                     self.temp_hide = None
                     self.btn_hide.setText("사용 안 함")
                 
-                self.btn_follow.setStyleSheet("")
-                self.btn_transparent.setStyleSheet("")
-                self.btn_hide.setStyleSheet("")
+                self._reset_hotkey_button_styles()
                 self.is_setting_target = None
                 event.accept()
                 return
@@ -3420,9 +3730,7 @@ class SettingsModal(QDialog):
                 self.temp_hide = final_hotkey
                 self.btn_hide.setText(final_hotkey)
                 
-            self.btn_follow.setStyleSheet("")
-            self.btn_transparent.setStyleSheet("")
-            self.btn_hide.setStyleSheet("")
+            self._reset_hotkey_button_styles()
             self.is_setting_target = None
             event.accept()
             return
@@ -3446,9 +3754,7 @@ class SettingsModal(QDialog):
                     self.temp_hide = final_hotkey
                     self.btn_hide.setText(final_hotkey)
                     
-                self.btn_follow.setStyleSheet("")
-                self.btn_transparent.setStyleSheet("")
-                self.btn_hide.setStyleSheet("")
+                self._reset_hotkey_button_styles()
                 self.is_setting_target = None
                 event.accept()
                 return
@@ -3494,84 +3800,71 @@ class HelpModal(QDialog):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        self.setStyleSheet("""
-            #ModalContainer {
-                background-color: rgba(28, 28, 30, 0.95);
-                border: 1.5px solid rgba(255, 255, 255, 0.15);
-                border-radius: 16px;
-            }
-            QLabel {
-                color: #ffffff;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            }
-            QPushButton {
-                background-color: #0066cc;
-                color: white;
-                border: none;
-                border-radius: 12px;
-                padding: 8px 24px;
-                font-size: 13px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: #0071e3;
-            }
-            QPushButton:pressed {
-                transform: scale(0.96);
-            }
-        """)
-        
+        self.setStyleSheet(get_modal_style())
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        
+
         container = QFrame()
         container.setObjectName("ModalContainer")
         container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(24, 24, 24, 24)
-        container_layout.setSpacing(16)
-        
-        # Lucide-style original penguin SVG loader next to clean title label text
-        title_layout_row = QHBoxLayout()
-        title_layout_row.setSpacing(8)
-        title_layout_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        title_icon = QLabel()
-        title_icon.setFixedSize(24, 24)
-        title_icon.setPixmap(get_svg_icon(LUCIDE_PENGUIN_SVG).pixmap(24, 24))
-        
-        title_label = QLabel("펭구쫭을 위한 사용 가이드")
-        title_label.setStyleSheet("font-size: 18px; font-weight: 600; color: #ffffff;")
-        
-        title_layout_row.addWidget(title_icon)
-        title_layout_row.addWidget(title_label)
-        container_layout.addLayout(title_layout_row)
-        
-        content_label = QLabel(
-            "<b>주요 단축키 및 조작법</b><br><br>"
-            "1. <b>확대/축소</b>: <span style='color: #0088ff;'>Ctrl + 마우스 휠</span><br>"
-            "2. <b>따라오기 토글</b>: <span style='color: #0088ff;'>Ctrl + 휠 클릭</span> (또는 설정 단축키)<br>"
-            "3. <b>영역 지정</b>: [영역 지정] 클릭 후 화면 드래그<br>"
-            "4. <b>투명도 설정</b>: 하단 투명도 슬라이더 사용 (15% ~ 100%)<br>"
-            "5. <b>마우스 투과 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + T</span> (또는 설정 단축키)<br>"
-            "   <i>※ 투과 모드가 켜지면 마우스 클릭이 창을 통과해 뒤쪽 게임을 조작할 수 있습니다. 다시 일반 모드로 돌아오려면 단축키를 누르세요.</i><br>"
-            "6. <b>프로그램 최소화 토글</b>: <span style='color: #0088ff;'>Ctrl + Alt + H</span> (또는 설정 단축키) 또는 상단 최소화 [-] 버튼<br>"
-            "7. <b>프로그램 설정</b>: 상단 설정 버튼 클릭<br>"
-            "8. <b>프로그램 종료</b>: [X] 버튼 또는 ESC 키"
+        container_layout.setContentsMargins(20, 16, 20, 18)
+        container_layout.setSpacing(12)
+
+        header, _ = build_modal_header(
+            "사용 가이드",
+            f"PENGU ZOOM PRO {APP_VERSION}",
+            on_close=self.accept,
+            icon_svg=LUCIDE_PENGUIN_SVG,
         )
-        content_label.setStyleSheet("font-size: 13px; line-height: 1.5; color: #cccccc;")
+        container_layout.addWidget(header)
+        container_layout.addWidget(build_divider())
+
+        guide_card, guide_body = build_section_card("주요 단축키 및 조작법", LUCIDE_SLIDERS_SVG)
+
+        # 단축키 조합은 액센트색 + 고정폭으로 본문과 구분한다.
+        def key(text):
+            return (f"<span style=\"color: {UI['accent']}; font-family: {UI['mono']};"
+                    f" font-weight: 700;\">{text}</span>")
+
+        content_label = QLabel(
+            "<table cellspacing='0' cellpadding='3'>"
+            f"<tr><td><b>확대/축소</b></td><td>{key('Ctrl + 마우스 휠')}</td></tr>"
+            f"<tr><td><b>따라오기 토글</b></td><td>{key('Ctrl + 휠 클릭')}</td></tr>"
+            f"<tr><td><b>마우스 투과 토글</b></td><td>{key('Ctrl + Alt + T')}</td></tr>"
+            f"<tr><td><b>최소화 토글</b></td><td>{key('Ctrl + Alt + H')}</td></tr>"
+            f"<tr><td><b>종료</b></td><td>{key('ESC')} 또는 [X] 버튼</td></tr>"
+            "</table>"
+        )
         content_label.setWordWrap(True)
-        container_layout.addWidget(content_label)
-        
+        guide_body.addWidget(content_label)
+        guide_body.addWidget(build_divider())
+
+        detail_label = QLabel(
+            "· <b>영역 지정</b>: [영역 지정] 클릭 후 화면을 드래그합니다.<br>"
+            "· <b>투명도</b>: 하단 슬라이더로 15% ~ 100% 사이를 조절합니다.<br>"
+            "· <b>투과 모드</b>: 켜면 마우스 클릭이 창을 통과해 뒤쪽 게임을 조작할 수 "
+            "있습니다. 같은 단축키로 되돌립니다.<br>"
+            "· 따라오기·투과·최소화 단축키는 설정에서 바꿀 수 있습니다."
+        )
+        detail_label.setObjectName("Hint")
+        detail_label.setWordWrap(True)
+        guide_body.addWidget(detail_label)
+
+        container_layout.addWidget(guide_card)
+        container_layout.addStretch()
+
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         close_btn = QPushButton("확인")
+        close_btn.setObjectName("PrimaryBtn")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
-        btn_layout.addStretch()
         container_layout.addLayout(btn_layout)
-        
+
         layout.addWidget(container)
-        self.resize(340, 400)
+        self.resize(440, 420)
         self.old_pos = None
         
     def mousePressEvent(self, event):
@@ -4579,7 +4872,7 @@ class MagnifierWindow(QMainWindow):
             dlg.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_CHECK_SVG, 16))
             dlg.lbl_client_icon.setVisible(True)
             dlg.lbl_client_status.setText("동기화 정상 연결됨")
-            dlg.lbl_client_status.setStyleSheet("color: #30d158; font-weight: 600; border: none; background: transparent; font-size: 13px;")
+            dlg._apply_client_status_tone("StatusOk")
 
     def on_client_connection_failed(self, error_msg):
         import time
@@ -4588,7 +4881,7 @@ class MagnifierWindow(QMainWindow):
             elapsed = time.time() - dlg.client_connection_start_time
             if elapsed < 45.0:
                 dlg.lbl_client_status.setText("서버 활성화 중... (최대 1분 소요)")
-                dlg.lbl_client_status.setStyleSheet("color: #ff9500; font-weight: 600; border: none; background: transparent; font-size: 13px;")
+                dlg._apply_client_status_tone("StatusWarn")
                 return
             
             dlg.spinner_timer.stop()
@@ -4614,7 +4907,7 @@ class MagnifierWindow(QMainWindow):
             dlg.lbl_client_icon.setPixmap(get_svg_pixmap(LUCIDE_ERROR_SVG, 16))
             dlg.lbl_client_icon.setVisible(True)
             dlg.lbl_client_status.setText(f"실패: {korean_msg}")
-            dlg.lbl_client_status.setStyleSheet("color: #ff453a; font-weight: 600; border: none; background: transparent; font-size: 13px;")
+            dlg._apply_client_status_tone("StatusError")
 
     def stop_party_client(self):
         if self.client:

@@ -9,6 +9,8 @@ ENV/
 build/
 dist/
 *.spec
+# pengzoom.spec 은 자동 생성물이 아니라 손으로 관리하는 빌드 정의다.
+!pengzoom.spec
 *.bin
 *.log
 .idea/
