@@ -955,6 +955,18 @@ class BossDebuffTracker:
     def total_duration(self) -> float:
         return self.configured_duration or self.learned_duration
 
+    def reset_learned_duration(self) -> None:
+        """Forget the auto-learned total.
+
+        A value learned by an older build could be inflated (a mid-cast refresh
+        used to add the elapsed time on top of the reading, so a 20s debuff was
+        stored as 28.8s) and there was no way back: the value only ever grew and
+        was written to the config file.  Clearing ``observed_max`` too means the
+        next confirmed reading re-learns it from scratch.
+        """
+        self.observed_max = 0.0
+        self.learned_duration = 0.0
+
     def set_anchor(self, value: float, now: float, source: str = "manual") -> None:
         """Pin the countdown to an exactly known remaining value."""
         self._anchor_value = float(value)
@@ -1235,7 +1247,10 @@ class BossDebuffDetector(QThread):
             # from an older build could be inflated by a mid-cast refresh, so it
             # is capped: no debuff in the strip runs longer than this.
             restored = max(0.0, min(float(learned_duration), MAX_LEARNED_DURATION))
-            self.tracker.learned_duration = max(self.tracker.learned_duration, restored)
+            if self.tracker.observed_max <= 0.0:
+                # 이 세션에서 아직 숫자를 읽지 못했으면 설정값이 유일한 근거다.
+                # 예전에는 max() 로 합쳐서 한 번 부풀려진 값이 영원히 남았다.
+                self.tracker.learned_duration = restored
         if min_icon_px is not None:
             self.min_icon_px = max(8, int(min_icon_px))
         if max_icon_px is not None:
@@ -1250,6 +1265,14 @@ class BossDebuffDetector(QThread):
         if QRect is not None and isinstance(rect, QRect):
             return [rect.x(), rect.y(), rect.width(), rect.height()]
         return [int(v) for v in rect]
+
+    def reset_learned_duration(self) -> dict:
+        """Drop the auto-learned total and report the fresh state."""
+        self.tracker.reset_learned_duration()
+        state = self.tracker.snapshot()
+        self._last_state = state
+        self._emit_state(state)
+        return state
 
     def reload_assets(self):
         self.templates = load_icon_templates(self.debuff_id)

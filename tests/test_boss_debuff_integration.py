@@ -139,6 +139,55 @@ class BossDebuffWiringTests(unittest.TestCase):
             self.window.boss_debuff_detector.tracker.learned_duration, 12.3
         )
 
+    def test_shrinking_learned_duration_is_persisted_too(self):
+        """부풀려진 학습값이 설정 파일에 영원히 남지 않아야 한다.
+
+        예전에는 값이 커질 때만 저장했다. 그래서 20초 디버프가 28.8초로 한 번
+        굳으면 재시작마다 28초부터 세는 것처럼 보였다.
+        """
+        self.window.on_boss_debuff_updated(bdd.DEFAULT_DEBUFF_ID, {
+            "active": True, "remaining": 19.0, "source": "ocr",
+            "score": 0.99, "learned_duration": 28.8,
+        })
+        self.assertAlmostEqual(self.window.boss_debuff_config["learned_duration"], 28.8)
+        self.window.on_boss_debuff_updated(bdd.DEFAULT_DEBUFF_ID, {
+            "active": True, "remaining": 19.0, "source": "ocr",
+            "score": 0.99, "learned_duration": 19.0,
+        })
+        self.assertAlmostEqual(self.window.boss_debuff_config["learned_duration"], 19.0)
+        self.window.load_settings()
+        self.assertAlmostEqual(self.window.boss_debuff_config["learned_duration"], 19.0)
+
+    def test_stored_learned_duration_does_not_inflate_the_tracker(self):
+        tracker = self.window.boss_debuff_detector.tracker
+        tracker.learned_duration = 12.0
+        tracker.observed_max = 0.0
+        self.window.boss_debuff_config["learned_duration"] = 28.8
+        self.window.apply_boss_debuff_settings()
+        self.assertAlmostEqual(tracker.learned_duration, 28.8)
+        # 이 세션에서 숫자를 읽었다면 그 값이 우선이고 설정값이 덮어쓰지 않는다.
+        tracker.observed_max = 19.0
+        tracker.learned_duration = 19.0
+        self.window.apply_boss_debuff_settings()
+        self.assertAlmostEqual(tracker.learned_duration, 19.0)
+
+    def test_reset_button_clears_the_learned_duration(self):
+        self.window.boss_debuff_config["learned_duration"] = 28.8
+        self.window.apply_boss_debuff_settings()
+        dialog = magnifier.SettingsModal(self.window)
+        try:
+            dialog.refresh_boss_debuff_ui()
+            self.assertIn("28.8", dialog.boss_learned_label.text())
+            dialog.reset_boss_learned_duration()
+            self.assertEqual(self.window.boss_debuff_config["learned_duration"], 0.0)
+            self.assertEqual(
+                self.window.boss_debuff_detector.tracker.learned_duration, 0.0)
+            self.assertIn("없음", dialog.boss_learned_label.text())
+            self.window.load_settings()
+            self.assertEqual(self.window.boss_debuff_config["learned_duration"], 0.0)
+        finally:
+            dialog.deleteLater()
+
     def test_local_state_reaches_the_party_banner(self):
         self.window.on_boss_debuff_updated(bdd.DEFAULT_DEBUFF_ID, {
             "active": True, "remaining": 9.0, "source": "anchor", "score": 0.99,

@@ -35,7 +35,7 @@ from capture_overlay import CaptureOverlay
 
 # 앱 버전. 창 제목/브랜드 배지/AppUserModelID/빌드 산출물 이름이 모두 이 값을
 # 따른다. 이전에는 문자열이 흩어져 있어 한쪽만 올라가는 일이 있었다.
-APP_VERSION = "2.48"
+APP_VERSION = "2.49"
 APP_NAME = "펭구 줌인"
 
 # Set explicit AppUserModelID on Windows to fix Taskbar Icon grouping and display issues
@@ -3474,6 +3474,16 @@ class SettingsModal(QDialog):
         self.boss_duration_spin.setSuffix(" 초 (0=자동)")
         self.boss_duration_spin.valueChanged.connect(self.on_boss_controls_changed)
         tune_row.addWidget(self.boss_duration_spin)
+        self.boss_learned_label = QLabel("학습값 없음")
+        self.boss_learned_label.setStyleSheet("font-size: 10px; color: #aaaaaa;")
+        tune_row.addWidget(self.boss_learned_label)
+        self.boss_reset_learned_btn = QPushButton("학습값 초기화")
+        self.boss_reset_learned_btn.setToolTip(
+            "자동 학습된 총 지속시간을 지웁니다. 값이 실제보다 길게 굳어 "
+            "디버프가 걸릴 때마다 엉뚱한 숫자가 스칠 때 사용하세요."
+        )
+        self.boss_reset_learned_btn.clicked.connect(self.reset_boss_learned_duration)
+        tune_row.addWidget(self.boss_reset_learned_btn)
         lay.addLayout(tune_row)
 
         self.boss_share_check = QCheckBox("파티원에게 보스 디버프 상태 공유")
@@ -3565,6 +3575,7 @@ class SettingsModal(QDialog):
             )
         else:
             self.boss_region_label.setText("영역 미지정")
+        self.refresh_boss_learned_label()
         detector = self.parent_window.boss_debuff_detector
         digits = detector.profile.digit_coverage
         if detector.profile.trusted:
@@ -3576,6 +3587,35 @@ class SettingsModal(QDialog):
             self.boss_train_status.setText(
                 f"숫자 표본 부족 (없음 {missing}) · 지속시간 기반 추정만 사용")
 
+    def refresh_boss_learned_label(self):
+        """자동 학습된 총 지속시간을 그대로 보여준다.
+
+        예전에는 이 값이 보이지 않아서, 20초 디버프가 28.8초로 굳어 있어도
+        사용자가 원인을 알 수 없었다.
+        """
+        config = self._boss_config()
+        learned = float(config.get('learned_duration', 0) or 0)
+        manual = float(config.get('duration', 0) or 0)
+        if manual > 0.0:
+            text = f"학습값 {learned:.1f}초 (수동 {manual:.1f}초 사용)" if learned > 0 \
+                else f"수동 {manual:.1f}초 사용"
+        elif learned > 0.0:
+            text = f"학습값 {learned:.1f}초"
+        else:
+            text = "학습값 없음"
+        self.boss_learned_label.setText(text)
+
+    def reset_boss_learned_duration(self):
+        config = self._boss_config()
+        config['learned_duration'] = 0.0
+        detector = self.parent_window.boss_debuff_detector
+        detector.reset_learned_duration()
+        self.parent_window.save_settings()
+        self.refresh_boss_learned_label()
+        self.boss_status_label.setText(
+            "학습된 지속시간을 지웠습니다. 다음 캐스트에서 읽은 숫자로 다시 학습합니다."
+        )
+
     def on_boss_controls_changed(self, *_args):
         config = self._boss_config()
         config['enabled'] = self.boss_enable_check.isChecked()
@@ -3584,6 +3624,7 @@ class SettingsModal(QDialog):
         config['share_with_party'] = self.boss_share_check.isChecked()
         config['collect_samples'] = self.boss_collect_check.isChecked()
         self.boss_threshold_value.setText(f"{config['threshold']:.2f}")
+        self.refresh_boss_learned_label()
         self.parent_window.apply_boss_debuff_settings()
         self.parent_window.save_settings()
 
@@ -3630,6 +3671,7 @@ class SettingsModal(QDialog):
     def on_boss_debuff_state(self, state):
         if not isinstance(state, dict) or not state:
             return
+        self.refresh_boss_learned_label()
         if state.get("active"):
             remaining = state.get("remaining")
             source = {
@@ -5374,12 +5416,17 @@ class MagnifierWindow(QMainWindow):
             self.party_panel.update_boss_debuff(self.boss_debuff_state)
         self.broadcast_boss_debuff()
         
-        # Persist a newly learned total duration so the next session starts with it.
+        # Persist the learned total duration, in both directions.  It used to be
+        # written only when it grew, so a value inflated by an old build (a 20s
+        # debuff stored as 28.8s) survived every restart and each new cast
+        # started by flashing 28초 until OCR corrected it.
         config = getattr(self, 'boss_debuff_config', None)
         learned = float(self.boss_debuff_state.get('learned_duration', 0) or 0)
-        if isinstance(config, dict) and learned > float(config.get('learned_duration', 0) or 0) + 0.05:
-            config['learned_duration'] = round(learned, 1)
-            self.save_settings()
+        if isinstance(config, dict) and self.boss_debuff_state.get('active'):
+            stored = float(config.get('learned_duration', 0) or 0)
+            if learned > 0.0 and abs(learned - stored) > 0.05:
+                config['learned_duration'] = round(learned, 1)
+                self.save_settings()
         
         dialog = getattr(self, 'config_dialog_ref', None)
         if dialog and dialog.isVisible() and hasattr(dialog, 'on_boss_debuff_state'):
