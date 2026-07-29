@@ -91,7 +91,7 @@ python magnifier.py
 ## 🐧 기동 인트로 (신규)
 
 앱이 켜질 때 펭구 마스코트가 점프해 등장하고, 손을 두 번 흔들고, 눈을 깜빡이고
-윙크한 뒤 고개를 숙여 인사하고 사라지는 2.35초짜리 인트로가 투명 창에
+윙크한 뒤 고개를 숙여 인사하고 사라지는 2.41초짜리 인트로가 투명 창에
 재생됩니다. 재생 중 **클릭이나 ESC로 즉시 건너뛸 수 있고**,
 `설정 → 표시 옵션 → 시작할 때 마스코트 인트로 보여주기` 로 끌 수 있습니다.
 
@@ -132,9 +132,15 @@ despill 을 생략하면 어두운 배경에서 캐릭터 외곽에 초록 테�
 새 시트로 교체할 때:
 ```bash
 py tools/build_intro_frames.py --sheet intro_assets/새시트.png --cols 4 --rows 3
-py design_preview/verify_intro.py   # 타임라인을 한 장으로 붙여 눈으로 확인
-py tests/test_intro_animation.py    # 정렬·타임라인·건너뛰기 검사
+py design_preview/verify_intro.py       # 타임라인을 한 장으로 붙여 눈으로 확인
+py design_preview/render_intro_gif.py   # 실제 속도로 재생되는 GIF (컷 길이 판단용)
+py tests/test_intro_animation.py        # 정렬·타임라인·건너뛰기 검사
 ```
+
+컷 길이는 정지 컷 시트로는 판단할 수 없어 GIF로 A/B 비교해서 정했습니다. 공중
+정점에 60ms 머물러 체공감을 주고, 윙크는 250ms 유지해 표정이 읽히게 하고, 손
+흔들기는 컷당 90~110ms로 뒀습니다. 이 세 값은
+`tests/test_intro_animation.py` 가 되돌아가지 않게 검사합니다.
 
 ---
 
@@ -176,7 +182,7 @@ python tests/test_build_spec.py
 ```
 `tests/` 아래 파일은 표준 `unittest` 기반이라 별도 러너 없이 개별 실행됩니다.
 `tests/` 는 패키지가 아니라 `unittest discover` 로는 모이지 않으니, 전부 돌릴 때는
-파일을 훑어 주세요 (현재 11개 파일 200개).
+파일을 훑어 주세요 (현재 11개 파일 204개).
 
 ```powershell
 Get-ChildItem tests\test_*.py | ForEach-Object { py $_.FullName }

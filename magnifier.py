@@ -36,7 +36,7 @@ from capture_overlay import CaptureOverlay
 
 # 앱 버전. 창 제목/브랜드 배지/AppUserModelID/빌드 산출물 이름이 모두 이 값을
 # 따른다. 이전에는 문자열이 흩어져 있어 한쪽만 올라가는 일이 있었다.
-APP_VERSION = "2.52"
+APP_VERSION = "2.53"
 APP_NAME = "펭구 줌인"
 
 # Set explicit AppUserModelID on Windows to fix Taskbar Icon grouping and display issues
@@ -2998,7 +2998,7 @@ class SettingsModal(QDialog):
         display_body.addWidget(self.chk_show_intro)
 
         intro_hint = QLabel(
-            "앱이 켜질 때 펭구가 2.3초 동안 점프해 인사합니다. 다음 실행부터 "
+            "앱이 켜질 때 펭구가 2.4초 동안 점프해 인사합니다. 다음 실행부터 "
             "적용되고, 재생 중 클릭이나 ESC로 건너뛸 수 있습니다.")
         intro_hint.setObjectName("Hint")
         intro_hint.setWordWrap(True)

@@ -139,6 +139,46 @@ class TimelineTests(unittest.TestCase):
             self.assertIn(step.frame, range(1, intro_animation.FRAME_COUNT + 1))
             self.assertGreater(step.duration, 0)
 
+    def test_alternate_timelines_are_playable(self):
+        """타임라인을 갈아 끼워도 재생 불변식이 유지되는지(다른 컷 길이로) 확인한다."""
+        faster = tuple(step._replace(duration=max(20, step.duration // 2))
+                       for step in intro_animation.TIMELINE)
+        for name, timeline in (("current", intro_animation.TIMELINE),
+                               ("halved", faster)):
+            with self.subTest(timeline=name):
+                total = intro_animation.total_duration_ms(timeline)
+                self.assertGreater(total, 0)
+                self.assertEqual({step.frame for step in timeline},
+                                 set(range(1, intro_animation.FRAME_COUNT + 1)))
+                start = intro_animation.state_at(0, timeline)
+                end = intro_animation.state_at(total, timeline)
+                self.assertAlmostEqual(start.opacity, 0.0, places=6)
+                self.assertAlmostEqual(end.opacity, 0.0, places=6)
+                self.assertTrue(end.done)
+                dys = [intro_animation.state_at(t, timeline).dy
+                       for t in range(0, total, 5)]
+                self.assertLess(min(dys), -0.15, "점프가 없습니다.")
+
+    def test_apex_is_held_for_a_beat(self):
+        """정점을 스치듯 지나가면 체공감이 없다. 정점 부근에 머무는 컷이 있어야 한다."""
+        total = intro_animation.total_duration_ms()
+        samples = [intro_animation.state_at(t).dy for t in range(0, total, 10)]
+        apex = min(samples)
+        near_apex = [dy for dy in samples if dy <= apex + 0.02]
+        self.assertGreaterEqual(len(near_apex) * 10, 100,
+                                f"정점 유지가 너무 짧습니다: {len(near_apex) * 10}ms")
+
+    def test_wink_is_held_long_enough_to_read(self):
+        """표정은 200ms 이상 머물러야 눈에 읽힌다."""
+        wink = sum(step.duration for step in intro_animation.TIMELINE
+                   if step.frame == 10)
+        self.assertGreaterEqual(wink, 200, f"윙크가 너무 짧습니다: {wink}ms")
+
+    def test_wave_cuts_are_not_rushed(self):
+        waves = [step.duration for step in intro_animation.TIMELINE
+                 if step.frame in (5, 6, 7)]
+        self.assertGreaterEqual(min(waves), 90, f"웨이브 컷이 급합니다: {waves}")
+
     def test_manifest_and_module_agree_on_frame_count(self):
         manifest = json.loads((FRAMES_DIR / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest.get("frame_count"), intro_animation.FRAME_COUNT)

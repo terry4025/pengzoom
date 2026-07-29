@@ -63,46 +63,53 @@ def _step(frame, duration, scale=(1.0, 1.0), squash=(1.0, 1.0), dy=(0.0, 0.0),
 #   1 웅크림 · 2 도약(날개 아래) · 3 날개 활짝 · 4 중립 · 5 날개 45°
 #   6 날개 최대 + 벌린 입 · 7 날개 최대 + 손끝 꺾임 · 8 반쯤 감은 눈
 #   9 감은 눈 · 10 윙크 · 11 날개 모음 · 12 인사
+#
+# 컷 길이는 A/B 비교(`design_preview/render_intro_gif.py`) 후 고른 값이다.
+#   * 공중 정점에 60ms 머문다. 상승/하강만 두면 정점이 스쳐 체공감이 없다.
+#   * 윙크는 250ms 유지한다. 130ms 로는 표정이 읽히기 전에 지나간다.
+#   * 손 흔들기는 컷당 90~110ms. 80ms 이하는 급하게 보인다.
 TIMELINE = (
     # 등장: 웅크린 자세로 나타나 더 깊게 눌린다(도약 예비 동작).
-    _step(1, 110, scale=(0.92, 0.94), squash=(0.90, 0.84), opacity=(0.0, 1.0),
+    _step(1, 100, scale=(0.92, 0.94), squash=(0.90, 0.84), opacity=(0.0, 1.0),
           easing="out_quad"),
     _step(1, 110, scale=(0.94, 0.96), squash=(0.84, 0.74), easing="in_out_quad"),
     # 도약: 몸이 늘어나며 떠오른다.
-    _step(2, 110, scale=(0.96, 1.0), squash=(0.74, 1.12), dy=(0.0, -0.06),
+    _step(2, 100, scale=(0.96, 1.0), squash=(0.74, 1.12), dy=(0.0, -0.06),
           easing="out_quad"),
-    # 공중: 날개를 펼치고 정점까지 올라간 뒤 떨어진다.
-    _step(3, 130, squash=(1.08, 1.0), dy=(-0.06, -0.20), rot=(0.0, -2.0),
+    # 공중: 날개를 펼치고 정점까지 올라가 잠깐 머문 뒤 떨어진다.
+    _step(3, 150, squash=(1.08, 1.0), dy=(-0.06, -0.20), rot=(0.0, -2.0),
           easing="out_cubic"),
-    _step(3, 120, squash=(1.0, 0.98), dy=(-0.20, -0.06), rot=(-2.0, 1.0),
+    _step(3, 60, dy=(-0.20, -0.19), rot=(-2.0, -1.0), easing="linear"),
+    _step(3, 110, squash=(1.0, 0.98), dy=(-0.19, -0.06), rot=(-1.0, 1.0),
           easing="in_quad"),
     # 착지: 눌렸다가 반동으로 살짝 늘어난 뒤 정착한다.
-    _step(1, 90, squash=(0.98, 0.80), dy=(-0.06, 0.0), easing="in_quad"),
+    _step(1, 80, squash=(0.98, 0.80), dy=(-0.06, 0.0), easing="in_quad"),
     _step(4, 110, squash=(0.80, 1.06), rot=(1.0, 0.0), easing="out_cubic"),
-    _step(4, 80, squash=(1.06, 1.0), easing="out_quad"),
+    _step(4, 60, squash=(1.06, 1.0), easing="out_quad"),
     # 손 흔들기 1회차: 45° → 최대 → 손끝 꺾임 → 내려옴.
     _step(5, 90, rot=(0.0, -1.5), easing="out_quad"),
-    _step(6, 90, rot=(-1.5, -3.0), easing="out_quad"),
-    _step(7, 80, rot=(-3.0, -3.5), easing="linear"),
-    _step(5, 80, rot=(-3.5, -1.0), easing="out_quad"),
+    _step(6, 110, rot=(-1.5, -3.0), easing="out_quad"),
+    _step(7, 90, rot=(-3.0, -3.5), easing="linear"),
+    _step(5, 90, rot=(-3.5, -1.0), easing="out_quad"),
     # 2회차.
-    _step(6, 90, rot=(-1.0, -3.0), easing="out_quad"),
-    _step(7, 80, rot=(-3.0, -3.5), easing="linear"),
+    _step(6, 110, rot=(-1.0, -3.0), easing="out_quad"),
+    _step(7, 90, rot=(-3.0, -3.5), easing="linear"),
     _step(5, 90, rot=(-3.5, 0.0), easing="out_quad"),
-    _step(4, 60),
+    _step(4, 50),
     # 눈 깜빡임(반쯤 → 완전 → 반쯤)과 윙크.
-    _step(8, 60, easing="linear"),
-    _step(9, 90, easing="linear"),
-    _step(8, 60, easing="linear"),
-    _step(10, 130),
+    _step(8, 50, easing="linear"),
+    _step(9, 80, easing="linear"),
+    _step(8, 50, easing="linear"),
+    _step(10, 250),
     # 마무리: 날개를 모으고 고개를 숙여 인사한 뒤 사라진다.
-    _step(11, 140, squash=(1.0, 0.99)),
-    _step(12, 150, rot=(0.0, 3.0), dy=(0.0, 0.01), easing="out_quad"),
-    _step(12, 200, scale=(1.0, 1.03), dy=(0.01, -0.02), opacity=(1.0, 0.0),
+    _step(11, 100, squash=(1.0, 0.99)),
+    _step(12, 120, rot=(0.0, 3.0), dy=(0.0, 0.01), easing="out_quad"),
+    _step(12, 160, scale=(1.0, 1.03), dy=(0.01, -0.02), opacity=(1.0, 0.0),
           easing="in_quad"),
 )
 
 FrameState = namedtuple("FrameState", "frame scale_x scale_y dy rotation opacity done")
+
 
 
 def _ease(name, t):
