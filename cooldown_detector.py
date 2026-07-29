@@ -19,6 +19,8 @@ from cooldown_ocr import (
     build_profile_from_images,
     train_capture_profile,
 )
+import cooldown_reader
+from cooldown_learning import CooldownLearner
 
 class SkillSlot:
     def __init__(self, name="스킬", rect=None, threshold=0.85, cooldown_duration=0):
@@ -62,6 +64,7 @@ class SkillSlot:
 class CooldownDetector(QThread):
     state_changed = pyqtSignal(str, bool, float)  # (skill_name, is_ready, similarity)
     cooldown_observed = pyqtSignal(str, int, float)  # (skill_name, seconds, confidence)
+    cooldown_learned = pyqtSignal(str, int, str)  # (skill_name, seconds, source)
     ocr_quality = pyqtSignal(str, object)  # (skill_name, diagnostic dictionary)
     calibration_finished = pyqtSignal(str, object)  # (skill_name, result dictionary)
     developer_capture_status = pyqtSignal(str, object)  # (skill_name, capture status)
@@ -83,6 +86,13 @@ class CooldownDetector(QThread):
         self._trigger_queue = queue.Queue()
         self._developer_sessions = {}
         self.capture_import_result = {}
+
+        # 쿨타임 총량 자동 학습. 표시는 여전히 수동 카운트다운이 담당하고,
+        # 학습은 '캐스트 직후 2초'만 들여다본다(cooldown_learning 모듈 설명 참고).
+        self.cooldown_learning_enabled = True
+        self.learner = CooldownLearner()
+        self._learn_interval = 1.0 / 5.0
+        self._learn_next_scan = {}
 
     def import_developer_captures(self, force=False):
         result = train_capture_profile(
@@ -275,16 +285,72 @@ class CooldownDetector(QThread):
                 slot.cooldown_start_time = trigger_wall
                 slot.cooldown_seen_unready = False
 
+            # 쿨타임을 아직 모르는 스킬도 학습을 시작해야 하므로, 수동값이
+            # 설정돼 있는지와 무관하게 캐스트 시점을 기록한다.
+            if self.cooldown_learning_enabled:
+                self.learner.on_cast(name, trigger_mono)
+                self._learn_next_scan[name] = trigger_mono
+
             if self.developer_capture_enabled:
                 self._start_developer_capture(name, slot, trigger_mono, now_mono)
 
     @staticmethod
     def _manual_timer_running(slot, at_wall=None):
-        """수동 쿨타임이 아직 남아 있는지."""
         if slot.cooldown_start_time <= 0.0 or slot.cooldown_duration <= 0:
             return False
         at_wall = time.time() if at_wall is None else at_wall
         return (at_wall - slot.cooldown_start_time) < slot.cooldown_duration
+
+    # -- 쿨타임 총량 자동 학습 ------------------------------------------------
+    def _learn_from_frame(self, name, captured_rgb, now_mono):
+        """캐스트 직후 2초 동안만 숫자를 읽어 학습에 넘긴다.
+
+        표시용 카운트다운은 건드리지 않는다. 판독이 실패해도 사용자가 보는 값은
+        달라지지 않고, 다음 캐스트에서 다시 시도할 뿐이다.
+        """
+        if not self.learner.should_scan(name, now_mono):
+            return
+        if now_mono < self._learn_next_scan.get(name, 0.0):
+            return
+        self._learn_next_scan[name] = now_mono + self._learn_interval
+
+        profile = cooldown_reader.load_profile()
+        if profile is None:
+            return
+        try:
+            slot_bgr = cv2.cvtColor(captured_rgb, cv2.COLOR_RGB2BGR)
+            reading = cooldown_reader.read_cooldown(
+                slot_bgr, profile, expected=self.learner.expected(name, now_mono))
+        except Exception:
+            return
+        if reading.seconds is None:
+            return
+        self.cooldown_observed.emit(name, int(reading.seconds), float(reading.confidence))
+        self._apply_learned(name, self.learner.on_reading(name, int(reading.seconds), now_mono))
+
+    def _apply_learned(self, name, learned):
+        """새로 확정된 쿨타임을 알린다(수동값을 조용히 덮지 않는다)."""
+        if not learned:
+            return
+        slot = self.slots.get(name)
+        state = self.learner.state(name)
+        if slot is not None and slot.cooldown_duration <= 0:
+            # 아직 아무 값도 없으면 바로 채운다. 이게 이 기능의 목적이다.
+            slot.cooldown_duration = int(learned)
+        self.cooldown_learned.emit(name, int(learned), state.learned_source)
+
+    def learned_cooldowns(self) -> dict:
+        return {name: state.learned for name, state in self.learner.states.items()
+                if state.learned is not None}
+
+    def restore_learned_cooldowns(self, data) -> None:
+        self.learner.restore(data)
+
+    def learned_snapshot(self) -> dict:
+        return self.learner.snapshot()
+
+    def reset_learned_cooldown(self, name=None) -> None:
+        self.learner.forget(name)
 
     @staticmethod
     def _safe_capture_name(name):
@@ -496,8 +562,11 @@ class CooldownDetector(QThread):
         self._drain_trigger_requests()
         for name, slot in list(self.slots.items()):
             capture_active = name in self._developer_sessions
+            learning_active = (self.cooldown_learning_enabled
+                               and self.learner.should_scan(name, time.monotonic()))
             if slot.rect is None or (
-                slot.template is None and not slot.ocr_enabled and not capture_active
+                slot.template is None and not slot.ocr_enabled
+                and not capture_active and not learning_active
             ):
                 continue
 
@@ -551,6 +620,19 @@ class CooldownDetector(QThread):
                 if template_ready != slot.is_ready:
                     slot.is_ready = template_ready
                     self.state_changed.emit(name, template_ready, max_val)
+                    if self.cooldown_learning_enabled:
+                        if template_ready:
+                            # 다시 쓸 수 있게 된 순간까지의 경과 시간이 곧 쿨타임이다.
+                            self._apply_learned(name, self.learner.on_ready(name, now_mono))
+                        else:
+                            # 템플릿으로 본 '사용됨' 전환도 캐스트로 취급한다.
+                            # 트리거 키를 등록하지 않은 스킬도 학습되게 한다.
+                            if self.learner.state(name).cast_at is None:
+                                self.learner.on_cast(name, now_mono)
+                                self._learn_next_scan[name] = now_mono
+
+                if self.cooldown_learning_enabled:
+                    self._learn_from_frame(name, captured_rgb, now_mono)
 
                 # Manual timer expiry cannot create Ready. Some skills remain
                 # unavailable after cooldown until their resource is restored.

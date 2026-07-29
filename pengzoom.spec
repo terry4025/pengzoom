@@ -32,18 +32,21 @@ if DEBUG_CONSOLE:
 # 런타임이 sys._MEIPASS 아래에서 찾는 경로들.
 #   cooldown_ocr._resource_path()          -> ocr_profiles/
 #   boss_debuff_detector.assets_root()     -> boss_debuff_assets/
+#   cooldown_reader.assets_root()          -> cooldown_assets/profiles/
 #   intro_animation.assets_root()          -> intro_assets/frames/
 #
 # boss_debuff_assets 는 통째로 넣지 않는다. reference/ 와 samples/ 는 템플릿을
 # 만들 때 쓴 개발용 원본(400KB 이상)이고 감지 경로에서 읽지 않는다. 실제로
 # 필요한 것은 아이콘 템플릿과 숫자 글리프 프로파일 두 개다.
 #
+# cooldown_assets 도 같은 이유로 profiles/ 만 넣는다(samples/ 는 학습 입력).
 # intro_assets 도 정규화된 frames/ 만 넣는다. 원본 스프라이트 시트(1.5MB)는
 # tools/build_intro_frames.py 입력일 뿐 런타임에서 읽지 않는다.
 datas = [
     (str(ROOT / "ocr_profiles"), "ocr_profiles"),
     (str(ROOT / "boss_debuff_assets" / "icons"), "boss_debuff_assets/icons"),
     (str(ROOT / "boss_debuff_assets" / "timer_profiles"), "boss_debuff_assets/timer_profiles"),
+    (str(ROOT / "cooldown_assets" / "profiles"), "cooldown_assets/profiles"),
     (str(ROOT / "intro_assets" / "frames"), "intro_assets/frames"),
 ]
 

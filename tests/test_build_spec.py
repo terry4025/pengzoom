@@ -207,6 +207,23 @@ class FrozenLayoutTests(unittest.TestCase):
         leaked = list((self.bundle / "intro_assets").rglob("*sheet*"))
         self.assertEqual(leaked, [], f"원본 시트가 배포본에 들어갔습니다: {leaked}")
 
+    def test_cooldown_profile_is_found(self):
+        # 쿨타임 자동 학습은 이 프로파일이 없으면 조용히 꺼진다(load_profile -> None).
+        import cooldown_reader
+
+        cooldown_reader.reload_profile()
+        self.addCleanup(cooldown_reader.reload_profile)
+        self.assertEqual(cooldown_reader.assets_root(), self.bundle / "cooldown_assets")
+        profile = cooldown_reader.load_profile()
+        self.assertIsNotNone(profile, "번들에 쿨타임 글리프 프로파일이 없습니다.")
+        self.assertEqual(len(profile.digit_coverage), 10)
+        self.assertTrue(profile.trusted)
+
+    def test_cooldown_samples_are_not_shipped(self):
+        # 학습 입력(41장)은 배포본에서 읽지 않는다.
+        leaked = list((self.bundle / "cooldown_assets").rglob("slot*.png"))
+        self.assertEqual(leaked, [], f"학습 샘플이 배포본에 들어갔습니다: {leaked}")
+
 
 if __name__ == "__main__":
     unittest.main()

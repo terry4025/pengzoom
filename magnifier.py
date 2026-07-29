@@ -36,7 +36,7 @@ from capture_overlay import CaptureOverlay
 
 # 앱 버전. 창 제목/브랜드 배지/AppUserModelID/빌드 산출물 이름이 모두 이 값을
 # 따른다. 이전에는 문자열이 흩어져 있어 한쪽만 올라가는 일이 있었다.
-APP_VERSION = "2.53"
+APP_VERSION = "2.54"
 APP_NAME = "펭구 줌인"
 
 # Set explicit AppUserModelID on Windows to fix Taskbar Icon grouping and display issues
@@ -2996,13 +2996,26 @@ class SettingsModal(QDialog):
         self.chk_show_intro.setChecked(getattr(self.parent_window, 'show_intro', True))
         self.chk_show_intro.setCursor(Qt.CursorShape.PointingHandCursor)
         display_body.addWidget(self.chk_show_intro)
-
         intro_hint = QLabel(
             "앱이 켜질 때 펭구가 2.4초 동안 점프해 인사합니다. 다음 실행부터 "
             "적용되고, 재생 중 클릭이나 ESC로 건너뛸 수 있습니다.")
         intro_hint.setObjectName("Hint")
         intro_hint.setWordWrap(True)
         display_body.addWidget(intro_hint)
+
+        self.chk_cooldown_learning = QCheckBox("스킬 쿨타임 자동 학습 사용")
+        self.chk_cooldown_learning.setChecked(
+            getattr(self.parent_window, 'cooldown_learning', True))
+        self.chk_cooldown_learning.setCursor(Qt.CursorShape.PointingHandCursor)
+        display_body.addWidget(self.chk_cooldown_learning)
+
+        learn_hint = QLabel(
+            "스킬을 쓴 직후 2초 동안 슬롯의 남은 초 숫자를 읽어 쿨타임을 스스로 "
+            "알아냅니다. 서로 다른 사용에서 같은 값이 두 번 나와야 확정되고, "
+            "쿨타임을 직접 입력한 스킬은 건드리지 않습니다.")
+        learn_hint.setObjectName("Hint")
+        learn_hint.setWordWrap(True)
+        display_body.addWidget(learn_hint)
         lay.addWidget(display_card)
 
         tip = QLabel("단축키 지정 대기 중 ESC를 누르면 기본값으로 되돌립니다.")
@@ -4251,6 +4264,9 @@ class SettingsModal(QDialog):
         self.parent_window.room_id = self.txt_room_id.text().strip()
         self.parent_window.hide_ui_on_transparent = self.chk_hide_ui_on_transparent.isChecked()
         self.parent_window.show_intro = self.chk_show_intro.isChecked()
+        self.parent_window.cooldown_learning = self.chk_cooldown_learning.isChecked()
+        self.parent_window.detector.cooldown_learning_enabled = \
+            self.parent_window.cooldown_learning
         
         # Apply updated ui hiding right away
         self.parent_window.update_ui_visibility()
@@ -4555,6 +4571,8 @@ class MagnifierWindow(QMainWindow):
         self.detector = cooldown_detector.CooldownDetector()
         self.detector.device_ratio = QApplication.primaryScreen().devicePixelRatio()
         self.detector.state_changed.connect(self.on_skill_state_changed)
+        self.detector.cooldown_learned.connect(
+            self.on_cooldown_learned, Qt.ConnectionType.QueuedConnection)
         self.detector.start_detection(50)  # Scan every 50ms (runs inside background QThread)
         
         # Boss debuff (암흑 수류탄) detector — scans the strip under the boss HP bar
@@ -4717,6 +4735,8 @@ class MagnifierWindow(QMainWindow):
         self.client_id = None
         self.player_class = "홀리나이트"
         self.show_intro = True
+        self.cooldown_learning = True
+        self.detector.cooldown_learning_enabled = True
         self.developer_capture_mode = False
         self.detector.developer_capture_enabled = False
         self.boss_debuff_config = self.default_boss_debuff_config()
@@ -4744,6 +4764,12 @@ class MagnifierWindow(QMainWindow):
                     self.client_id = data.get('client_id', None)
                     self.player_class = data.get('player_class', "홀리나이트")
                     self.show_intro = bool(data.get('show_intro', True))
+                    # 쿨타임 총량 자동 학습(v2.54). 표시는 여전히 수동 카운트다운이
+                    # 담당하고, 학습값은 비어 있는 슬롯을 채우는 데만 쓰인다.
+                    self.cooldown_learning = bool(data.get('cooldown_learning', True))
+                    self.detector.cooldown_learning_enabled = self.cooldown_learning
+                    self.detector.restore_learned_cooldowns(
+                        data.get('learned_cooldowns', {}))
                     # Cooldown OCR/developer capture was retired in v2.46.
                     # Ignore legacy flags so old configs migrate to manual mode.
                     self.developer_capture_mode = False
@@ -4962,6 +4988,8 @@ class MagnifierWindow(QMainWindow):
                 'client_id': self.client_id,
                 'player_class': getattr(self, 'player_class', "홀리나이트"),
                 'show_intro': bool(getattr(self, 'show_intro', True)),
+                'cooldown_learning': bool(getattr(self, 'cooldown_learning', True)),
+                'learned_cooldowns': self.detector.learned_snapshot(),
                 'skills': skills_data,
                 'party_panel_pos': party_pos,
                 'party_panel_size': party_size,
@@ -5342,6 +5370,17 @@ class MagnifierWindow(QMainWindow):
                 duration = 0 if slot.is_ready else sync_remaining_seconds(self.detector, name)
                 self.client.send_update(name, slot.is_ready, duration)
         self.broadcast_boss_debuff(force=True)
+
+    def on_cooldown_learned(self, name, seconds, source):
+        """쿨타임 자동 학습 결과. 다음 실행에서도 쓰이도록 바로 저장한다.
+
+        수동으로 넣은 값은 덮지 않는다(감지 스레드가 비어 있는 슬롯만 채운다).
+        여기서는 학습값 자체를 설정 파일에 남기는 일만 한다.
+        """
+        try:
+            self.save_settings()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Boss debuff (암흑 수류탄) detection
