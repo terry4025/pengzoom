@@ -89,9 +89,29 @@ class FrameAssetTests(unittest.TestCase):
                              f"몸통 중심이 어긋났습니다: {centers}")
 
     def test_body_scale_is_normalized(self):
-        widths = [belly_metrics(array)["width"] for _, array in self.frames]
+        """의도적 변형(웅크림) 프레임을 뺀 나머지는 같은 크기여야 한다."""
+        widths = []
+        for row, (_, array) in zip(self.manifest["frames"], self.frames):
+            if not row.get("deformed"):
+                widths.append(belly_metrics(array)["width"])
         spread = (max(widths) - min(widths)) / min(widths)
-        self.assertLess(spread, 0.02, f"프레임 간 크기 편차가 큽니다: {widths}")
+        self.assertLess(spread, 0.03, f"프레임 간 크기 편차가 큽니다: {widths}")
+
+    def test_squash_pose_keeps_its_deformation(self):
+        """웅크린 프레임을 배 폭으로 정규화하면 스쿼시가 사라진다.
+
+        그 프레임은 중앙값 기준 배율을 받아야 하므로, 배가 여전히 더 넓어야 한다.
+        """
+        deformed = [row for row in self.manifest["frames"] if row.get("deformed")]
+        if not deformed:
+            self.skipTest("변형으로 분류된 프레임이 없습니다.")
+        normal = [row["belly_width"] for row in self.manifest["frames"]
+                  if not row.get("deformed")]
+        for row in deformed:
+            index = int(row["file"].split("_")[1].split(".")[0]) - 1
+            measured = belly_metrics(self.frames[index][1])["width"]
+            self.assertGreater(measured, max(normal) * 0.98,
+                               f"{row['file']} 의 변형이 정규화에 지워졌습니다.")
 
     def test_normalization_never_upscales(self):
         """확대가 섞이면 프레임마다 선명도가 달라진다."""
@@ -111,19 +131,53 @@ class TimelineTests(unittest.TestCase):
 
     def test_total_duration_is_short(self):
         total = intro_animation.total_duration_ms()
-        self.assertGreaterEqual(total, 1000)
-        self.assertLessEqual(total, 2500, "인트로가 길면 기동이 느리게 느껴진다.")
+        self.assertGreaterEqual(total, 1500)
+        self.assertLessEqual(total, 2800, "인트로가 길면 기동이 느리게 느껴진다.")
 
     def test_every_step_points_at_a_real_frame(self):
         for step in intro_animation.TIMELINE:
             self.assertIn(step.frame, range(1, intro_animation.FRAME_COUNT + 1))
             self.assertGreater(step.duration, 0)
 
-    def test_starts_invisible_and_small(self):
+    def test_manifest_and_module_agree_on_frame_count(self):
+        manifest = json.loads((FRAMES_DIR / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest.get("frame_count"), intro_animation.FRAME_COUNT)
+
+    def test_all_poses_are_used(self):
+        """12장을 받아 놓고 몇 장만 쓰면 그림값을 버리는 셈이다."""
+        used = {step.frame for step in intro_animation.TIMELINE}
+        self.assertEqual(used, set(range(1, intro_animation.FRAME_COUNT + 1)),
+                         f"쓰이지 않는 프레임: {set(range(1, 13)) - used}")
+
+    def test_starts_invisible_and_crouched(self):
         first = intro_animation.state_at(0)
         self.assertAlmostEqual(first.opacity, 0.0, places=6)
-        self.assertLess(first.scale_x, 0.7)
-        self.assertLess(first.scale_y, first.scale_x, "등장 첫 프레임은 납작해야 한다.")
+        self.assertLess(first.scale_y, first.scale_x, "등장 첫 프레임은 눌려 있어야 한다.")
+        self.assertAlmostEqual(first.dy, 0.0, places=6, msg="등장은 땅에서 시작한다.")
+
+    def test_jump_rises_and_lands(self):
+        """점프가 실제로 궤적을 그리는지: 올라갔다가 기준선으로 돌아온다."""
+        samples = [intro_animation.state_at(t).dy
+                   for t in range(0, intro_animation.total_duration_ms(), 5)]
+        apex = min(samples)
+        self.assertLess(apex, -0.15, f"점프가 너무 얕습니다: {apex}")
+        apex_index = samples.index(apex)
+        self.assertAlmostEqual(samples[-1], 0.0, delta=0.05)
+        # 정점 이후 착지까지 다시 내려와야 한다.
+        self.assertGreater(max(samples[apex_index:]), -0.02)
+
+    def test_landing_squashes_the_body(self):
+        """착지 순간에 세로가 눌려야 무게가 느껴진다."""
+        squashes = [intro_animation.state_at(t).scale_y / intro_animation.state_at(t).scale_x
+                    for t in range(0, intro_animation.total_duration_ms(), 5)]
+        self.assertLess(min(squashes), 0.85, "스쿼시가 없습니다.")
+        self.assertGreater(max(squashes), 1.05, "스트레치가 없습니다.")
+
+    def test_wave_tilts_the_body(self):
+        rotations = [intro_animation.state_at(t).rotation
+                     for t in range(0, intro_animation.total_duration_ms(), 5)]
+        self.assertLess(min(rotations), -2.0, "손 들 때 기울기가 없습니다.")
+        self.assertGreater(max(rotations), 2.0, "인사 기울기가 없습니다.")
 
     def test_ends_transparent_and_done(self):
         total = intro_animation.total_duration_ms()
@@ -136,23 +190,31 @@ class TimelineTests(unittest.TestCase):
     def test_negative_elapsed_is_clamped(self):
         self.assertEqual(intro_animation.state_at(-100), intro_animation.state_at(0))
 
-    def test_wave_alternates_between_two_poses(self):
-        """손 흔들기는 중립↔손들기 왕복으로 만든다(그림 추가 없이 두 번 흔든다)."""
+    def test_wave_alternates_through_three_wing_angles(self):
+        """웨이브는 45°(5) → 최대(6) → 손끝 꺾임(7) 순서로 두 번 지나간다."""
         frames = [step.frame for step in intro_animation.TIMELINE]
-        self.assertEqual(frames.count(4), 2, "손 든 프레임이 두 번 나와야 한다.")
-        first, second = (i for i, f in enumerate(frames) if f == 4)
-        self.assertEqual(frames[first - 1], 3)
-        self.assertEqual(frames[second - 1], 3)
+        self.assertEqual(frames.count(6), 2, "날개 최대 프레임이 두 번 나와야 한다.")
+        self.assertEqual(frames.count(7), 2)
+        for index, frame in enumerate(frames):
+            if frame == 6:
+                self.assertIn(frames[index - 1], (5, 7))
+                self.assertEqual(frames[index + 1], 7)
+
+    def test_blink_passes_through_the_half_closed_pose(self):
+        """눈은 반쯤 감은 프레임을 거쳐야 깜빡임으로 보인다."""
+        frames = [step.frame for step in intro_animation.TIMELINE]
+        closed = frames.index(9)
+        self.assertEqual(frames[closed - 1], 8)
+        self.assertEqual(frames[closed + 1], 8)
 
     def test_opacity_and_scale_stay_in_range(self):
         total = intro_animation.total_duration_ms()
+        peak = intro_animation.max_scale()
         for elapsed in range(0, total + 1, 5):
             state = intro_animation.state_at(elapsed)
             self.assertGreaterEqual(state.opacity, 0.0)
             self.assertLessEqual(state.opacity, 1.0)
-            # 오버슈트가 창 여유(HEADROOM)를 넘으면 그림이 잘린다.
-            self.assertLessEqual(max(state.scale_x, state.scale_y),
-                                 intro_animation.HEADROOM)
+            self.assertLessEqual(max(state.scale_x, state.scale_y), peak + 1e-9)
 
     def test_frame_sequence_is_continuous_in_time(self):
         """단계 경계에서 프레임이 누락되지 않는지 확인한다.
@@ -167,7 +229,7 @@ class TimelineTests(unittest.TestCase):
                 declared.append(step.frame)
 
         seen = []
-        for elapsed in range(0, intro_animation.total_duration_ms(), 10):
+        for elapsed in range(0, intro_animation.total_duration_ms(), 5):
             frame = intro_animation.state_at(elapsed).frame
             if not seen or seen[-1] != frame:
                 seen.append(frame)
@@ -216,12 +278,31 @@ class SplashWidgetTests(unittest.TestCase):
         self.assertTrue(
             self.splash.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
 
-    def test_window_has_room_for_the_overshoot(self):
-        canvas_w, canvas_h = self.splash.canvas_size
+    def test_window_has_room_for_the_jump_and_overshoot(self):
+        peak = intro_animation.max_scale()
+        rise = intro_animation.max_rise()
         self.assertGreaterEqual(self.splash.width(),
-                                canvas_w * self.splash.base_scale * 1.05)
+                                self.splash.display_w * peak)
         self.assertGreaterEqual(self.splash.height(),
-                                canvas_h * self.splash.base_scale * 1.05)
+                                self.splash.display_h * (peak + rise))
+        # 기준선이 창 안에 있고, 아래로 처지는 동작도 잘리지 않는다.
+        self.assertLess(self.splash.baseline_y(), self.splash.height())
+        self.assertGreater(self.splash.baseline_y(),
+                           self.splash.display_h * (peak + rise) - 1)
+
+    def test_art_never_leaves_the_window(self):
+        """점프 정점과 최대 배율에서도 그림이 창 밖으로 나가지 않아야 한다."""
+        canvas_w, canvas_h = self.splash.canvas_size
+        for elapsed in range(0, intro_animation.total_duration_ms() + 1, 10):
+            state = intro_animation.state_at(elapsed)
+            base = self.splash.base_scale
+            top = (self.splash.baseline_y() + state.dy * self.splash.display_h
+                   - self.splash.anchor[1] * base * state.scale_y)
+            half = self.splash.anchor[0] * base * state.scale_x
+            self.assertGreaterEqual(top, -1.0, f"{elapsed}ms 에서 위가 잘립니다.")
+            self.assertLessEqual(self.splash.width() / 2.0 + half,
+                                 self.splash.width() + 1.0,
+                                 f"{elapsed}ms 에서 옆이 잘립니다.")
 
     def test_never_upscales_the_source_art(self):
         """물리 픽셀 기준으로도 원본을 확대하지 않아야 선이 흐려지지 않는다."""

@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 import intro_animation  # noqa: E402
 
 COLUMNS = 8
-SAMPLES = 16
+SAMPLES = 24
 
 
 def checkerboard(size, cell=12):

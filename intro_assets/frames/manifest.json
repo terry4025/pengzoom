@@ -1,98 +1,189 @@
 {
-  "source_sheet": "mascot_intro_sheet_v1.png",
+  "source_sheet": "mascot_intro_sheet_v2.png",
   "grid": {
-    "cols": 3,
-    "rows": 2,
+    "cols": 4,
+    "rows": 3,
     "cell": [
-      512,
-      512
+      362,
+      362
     ]
   },
   "canvas": [
-    340,
-    341
+    316,
+    286
   ],
   "anchor": [
-    170,
-    331
+    158,
+    276
   ],
+  "frame_count": 12,
   "frames": [
     {
       "file": "frame_1.png",
-      "scale": 0.9459,
-      "belly_width": 148.0,
-      "baseline_y": 330,
-      "belly_center_x": 169.5,
+      "scale": 0.97,
+      "belly_width": 116.0,
+      "deformed": true,
+      "baseline_y": 275,
+      "belly_center_x": 157.5,
       "bbox": [
-        26,
-        15,
-        310,
-        330
+        51,
+        68,
+        265,
+        275
       ]
     },
     {
       "file": "frame_2.png",
-      "scale": 0.9589,
-      "belly_width": 146.0,
-      "baseline_y": 331,
-      "belly_center_x": 170.0,
+      "scale": 0.9798,
+      "belly_width": 99.0,
+      "deformed": false,
+      "baseline_y": 276,
+      "belly_center_x": 159.0,
       "bbox": [
-        11,
+        47,
         10,
-        330,
-        331
+        270,
+        276
       ]
     },
     {
       "file": "frame_3.png",
-      "scale": 0.9459,
-      "belly_width": 148.0,
-      "baseline_y": 330,
-      "belly_center_x": 170.5,
+      "scale": 0.9604,
+      "belly_width": 101.0,
+      "deformed": false,
+      "baseline_y": 276,
+      "belly_center_x": 158.0,
       "bbox": [
-        26,
-        15,
-        311,
-        330
+        10,
+        29,
+        305,
+        276
       ]
     },
     {
       "file": "frame_4.png",
-      "scale": 1.0,
-      "belly_width": 140.0,
-      "baseline_y": 330,
-      "belly_center_x": 170.5,
+      "scale": 0.951,
+      "belly_width": 102.0,
+      "deformed": false,
+      "baseline_y": 275,
+      "belly_center_x": 157.5,
       "bbox": [
-        15,
-        9,
-        309,
-        330
+        54,
+        32,
+        260,
+        275
       ]
     },
     {
       "file": "frame_5.png",
-      "scale": 0.979,
-      "belly_width": 143.0,
-      "baseline_y": 330,
-      "belly_center_x": 169.5,
+      "scale": 0.97,
+      "belly_width": 100.0,
+      "deformed": false,
+      "baseline_y": 275,
+      "belly_center_x": 157.5,
       "bbox": [
         26,
-        16,
-        308,
-        330
+        26,
+        262,
+        275
       ]
     },
     {
       "file": "frame_6.png",
-      "scale": 0.9589,
-      "belly_width": 146.0,
-      "baseline_y": 331,
-      "belly_center_x": 169.5,
+      "scale": 1.0,
+      "belly_width": 97.0,
+      "deformed": false,
+      "baseline_y": 275,
+      "belly_center_x": 158.0,
       "bbox": [
-        31,
-        23,
-        306,
-        331
+        40,
+        9,
+        271,
+        275
+      ]
+    },
+    {
+      "file": "frame_7.png",
+      "scale": 1.0,
+      "belly_width": 97.0,
+      "deformed": false,
+      "baseline_y": 275,
+      "belly_center_x": 158.0,
+      "bbox": [
+        48,
+        25,
+        267,
+        275
+      ]
+    },
+    {
+      "file": "frame_8.png",
+      "scale": 0.951,
+      "belly_width": 102.0,
+      "deformed": false,
+      "baseline_y": 275,
+      "belly_center_x": 158.0,
+      "bbox": [
+        55,
+        39,
+        260,
+        275
+      ]
+    },
+    {
+      "file": "frame_9.png",
+      "scale": 0.97,
+      "belly_width": 100.0,
+      "deformed": false,
+      "baseline_y": 275,
+      "belly_center_x": 158.0,
+      "bbox": [
+        57,
+        28,
+        260,
+        275
+      ]
+    },
+    {
+      "file": "frame_10.png",
+      "scale": 0.9898,
+      "belly_width": 98.0,
+      "deformed": false,
+      "baseline_y": 275,
+      "belly_center_x": 157.5,
+      "bbox": [
+        56,
+        21,
+        258,
+        275
+      ]
+    },
+    {
+      "file": "frame_11.png",
+      "scale": 0.9798,
+      "belly_width": 99.0,
+      "deformed": false,
+      "baseline_y": 275,
+      "belly_center_x": 158.0,
+      "bbox": [
+        70,
+        24,
+        245,
+        275
+      ]
+    },
+    {
+      "file": "frame_12.png",
+      "scale": 0.97,
+      "belly_width": 100.0,
+      "deformed": false,
+      "baseline_y": 275,
+      "belly_center_x": 158.0,
+      "bbox": [
+        53,
+        33,
+        264,
+        275
       ]
     }
   ]

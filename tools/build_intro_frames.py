@@ -27,7 +27,7 @@ import cv2
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SHEET = ROOT / "intro_assets" / "mascot_intro_sheet_v1.png"
+DEFAULT_SHEET = ROOT / "intro_assets" / "mascot_intro_sheet_v2.png"
 OUTPUT_DIR = ROOT / "intro_assets" / "frames"
 
 # 캔버스 여백(정규화 후 픽셀). 스쿼시/스트레치는 런타임 변환으로 주므로
@@ -36,9 +36,44 @@ SIDE_MARGIN = 10
 TOP_MARGIN = 10
 BOTTOM_MARGIN = 10
 
+# 배 폭이 이 비율 이상 벗어난 프레임은 '의도적 변형'(웅크림 등)으로 보고
+# 중앙값 기준 배율을 준다. 그러지 않으면 넓어진 배를 되돌려 스쿼시가 사라진다.
+DEFORMED_TOLERANCE = 0.08
+
+
+def key_chroma_green(rgb: np.ndarray):
+    """순수 초록 배경을 알파로 바꾸고 녹색 물듦을 깎는다.
+
+    이미지 생성 모델은 알파 채널 없이 단색 배경으로 내놓는 경우가 많다.
+    캐릭터에 녹색 계열이 없으므로 '녹색이 다른 채널을 넘는 양'으로 알파를
+    만들면 되고, 경계에 남는 녹색 물듦(spill)은 그 초과량만큼 깎아 없앤다.
+    despill 을 생략하면 캐릭터 외곽에 초록 테가 둘려 어두운 배경에서 티가 난다.
+    """
+    rgb = rgb.astype(np.float64)
+    red, green, blue = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    excess = green - np.maximum(red, blue)
+    low, high = 20.0, 90.0
+    alpha = 1.0 - np.clip((excess - low) / (high - low), 0.0, 1.0)
+    out = rgb.copy()
+    out[..., 1] = green - np.clip(excess, 0.0, None)
+    return np.dstack([np.clip(out, 0, 255), np.clip(alpha * 255.0, 0, 255)])
+
+
+def looks_like_green_screen(array: np.ndarray) -> bool:
+    if array.shape[2] == 4 and int(array[..., 3].min()) < 250:
+        return False  # 이미 알파가 있다
+    rgb = array[..., :3].astype(int)
+    green = ((rgb[..., 1] > 150)
+             & (rgb[..., 1] - rgb[..., 0] > 60)
+             & (rgb[..., 1] - rgb[..., 2] > 60))
+    return bool(green.mean() > 0.3)
+
 
 def cell_images(sheet: Image.Image, cols: int, rows: int):
-    """시트를 균일 격자로 잘라 (index, RGBA 배열) 목록을 만든다."""
+    """시트를 균일 격자로 잘라 (index, RGBA 배열) 목록을 만든다.
+
+    알파가 없는 초록 배경 시트는 이 단계에서 키잉해 알파를 붙인다.
+    """
     width, height = sheet.size
     if width % cols or height % rows:
         raise SystemExit(
@@ -46,6 +81,9 @@ def cell_images(sheet: Image.Image, cols: int, rows: int):
         )
     cell_w, cell_h = width // cols, height // rows
     array = np.array(sheet.convert("RGBA"))
+    if looks_like_green_screen(array):
+        array = key_chroma_green(array[..., :3])
+    array = array.astype(np.uint8)
     cells = []
     for row in range(rows):
         for col in range(cols):
@@ -87,7 +125,7 @@ def belly_metrics(cell: np.ndarray):
     rgb = cell[..., :3].astype(int)
     opaque = cell[..., 3] > 200
     red, green, blue = rgb[..., 0], rgb[..., 1], rgb[..., 2]
-    mask = opaque & (red > 170) & (green > 140) & (blue < 180) & (red - blue > 40)
+    mask = opaque & (red > 150) & (green > 110) & (blue < 180) & (red - blue > 35)
     if mask.sum() < 200:
         raise SystemExit("배 타원을 찾지 못했습니다. 색이 참조 아이콘과 다른지 확인하세요.")
     belly = largest_blob(mask)
@@ -123,6 +161,24 @@ def scale_rgba(cell: np.ndarray, scale: float) -> Image.Image:
     return Image.fromarray(straight.astype(np.uint8), "RGBA")
 
 
+def frame_scales(measured):
+    """프레임별 정규화 배율.
+
+    배 폭이 중앙값에서 크게 벗어난 프레임(웅크림처럼 일부러 배가 넓어진 포즈)은
+    그 폭을 기준으로 삼으면 안 된다. 그러면 넓어진 만큼 축소돼 스쿼시가 사라진다.
+    그런 프레임에는 중앙값 기준 배율을 준다.
+    """
+    widths = [item["belly_width"] for item in measured]
+    median = float(np.median(widths))
+    normal = [w for w in widths if abs(w - median) <= DEFORMED_TOLERANCE * median]
+    target = min(normal) if normal else median
+    scales = []
+    for width in widths:
+        deformed = abs(width - median) > DEFORMED_TOLERANCE * median
+        scales.append(target / (median if deformed else width))
+    return scales, target, median
+
+
 def build(sheet_path: Path, cols: int, rows: int, output_dir: Path):
     sheet = Image.open(sheet_path)
     cells, cell_size = cell_images(sheet, cols, rows)
@@ -139,13 +195,12 @@ def build(sheet_path: Path, cols: int, rows: int, output_dir: Path):
             "baseline_y": y1,
         })
 
-    target_belly = min(item["belly_width"] for item in measured)
+    scales, target_belly, median_belly = frame_scales(measured)
 
     # 정규화 후 필요한 캔버스 크기: 발바닥 기준선 위로 가장 높이 솟는 프레임과
     # 배 중심에서 좌우로 가장 넓게 퍼지는 프레임을 모두 담아야 한다.
     up = left = right = 0.0
-    for item in measured:
-        scale = target_belly / item["belly_width"]
+    for item, scale in zip(measured, scales):
         x0, y0, x1, y1 = item["bbox"]
         up = max(up, (y1 - y0) * scale)
         left = max(left, (item["belly_center_x"] - x0) * scale)
@@ -162,8 +217,7 @@ def build(sheet_path: Path, cols: int, rows: int, output_dir: Path):
         existing.unlink()
 
     report = []
-    for item in measured:
-        scale = target_belly / item["belly_width"]
+    for item, scale in zip(measured, scales):
         scaled = scale_rgba(cells[item["index"]], scale)
         canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
         offset_x = int(round(anchor_x - item["belly_center_x"] * scale))
@@ -179,6 +233,8 @@ def build(sheet_path: Path, cols: int, rows: int, output_dir: Path):
             "file": name,
             "scale": round(scale, 4),
             "belly_width": round(item["belly_width"], 1),
+            "deformed": bool(abs(item["belly_width"] - median_belly)
+                             > DEFORMED_TOLERANCE * median_belly),
             "baseline_y": int(cy1),
             "belly_center_x": round(belly_metrics(check)["center_x"], 1),
             "bbox": [cx0, cy0, cx1, cy1],
@@ -189,6 +245,7 @@ def build(sheet_path: Path, cols: int, rows: int, output_dir: Path):
         "grid": {"cols": cols, "rows": rows, "cell": list(cell_size)},
         "canvas": [canvas_w, canvas_h],
         "anchor": [anchor_x, anchor_y],
+        "frame_count": len(report),
         "frames": report,
     }
     (output_dir / "manifest.json").write_text(
@@ -197,19 +254,21 @@ def build(sheet_path: Path, cols: int, rows: int, output_dir: Path):
     print(f"시트      : {sheet_path}")
     print(f"칸 크기   : {cell_size[0]}x{cell_size[1]}  ({cols}x{rows})")
     print(f"캔버스    : {canvas_w}x{canvas_h}, 앵커 ({anchor_x}, {anchor_y})")
-    print(f"기준 배폭 : {target_belly:.1f}px")
+    print(f"기준 배폭 : {target_belly:.1f}px (중앙값 {median_belly:.1f}px)")
     for row in report:
+        mark = " *변형" if row["deformed"] else ""
         print(f"  {row['file']}  scale={row['scale']:.3f}  "
               f"baseline_y={row['baseline_y']}  belly_cx={row['belly_center_x']}  "
-              f"bbox={row['bbox']}")
+              f"bbox={row['bbox']}{mark}")
     return manifest
+
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sheet", type=Path, default=DEFAULT_SHEET)
-    parser.add_argument("--cols", type=int, default=3)
-    parser.add_argument("--rows", type=int, default=2)
+    parser.add_argument("--cols", type=int, default=4)
+    parser.add_argument("--rows", type=int, default=3)
     parser.add_argument("--out", type=Path, default=OUTPUT_DIR)
     args = parser.parse_args(argv)
 
