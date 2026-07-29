@@ -126,7 +126,7 @@ python tests/test_build_spec.py
 ```
 `tests/` 아래 파일은 표준 `unittest` 기반이라 별도 러너 없이 개별 실행됩니다.
 `tests/` 는 패키지가 아니라 `unittest discover` 로는 모이지 않으니, 전부 돌릴 때는
-파일을 훑어 주세요 (현재 10개 파일 144개).
+파일을 훑어 주세요 (현재 10개 파일 159개).
 
 ```powershell
 Get-ChildItem tests\test_*.py | ForEach-Object { py $_.FullName }
