@@ -30,12 +30,13 @@ import cv2
 import cooldown_detector
 import network_manager
 import boss_debuff_detector
+import intro_animation
 from boss_debuff_panel import BossDebuffBanner, party_state_key
 from capture_overlay import CaptureOverlay
 
 # 앱 버전. 창 제목/브랜드 배지/AppUserModelID/빌드 산출물 이름이 모두 이 값을
 # 따른다. 이전에는 문자열이 흩어져 있어 한쪽만 올라가는 일이 있었다.
-APP_VERSION = "2.50"
+APP_VERSION = "2.51"
 APP_NAME = "펭구 줌인"
 
 # Set explicit AppUserModelID on Windows to fix Taskbar Icon grouping and display issues
@@ -2990,6 +2991,18 @@ class SettingsModal(QDialog):
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         display_body.addWidget(hint)
+
+        self.chk_show_intro = QCheckBox("시작할 때 마스코트 인트로 보여주기")
+        self.chk_show_intro.setChecked(getattr(self.parent_window, 'show_intro', True))
+        self.chk_show_intro.setCursor(Qt.CursorShape.PointingHandCursor)
+        display_body.addWidget(self.chk_show_intro)
+
+        intro_hint = QLabel(
+            "앱이 켜질 때 펭구가 1.5초 동안 인사합니다. 다음 실행부터 적용되고, "
+            "재생 중 클릭이나 ESC로 건너뛸 수 있습니다.")
+        intro_hint.setObjectName("Hint")
+        intro_hint.setWordWrap(True)
+        display_body.addWidget(intro_hint)
         lay.addWidget(display_card)
 
         tip = QLabel("단축키 지정 대기 중 ESC를 누르면 기본값으로 되돌립니다.")
@@ -4237,6 +4250,7 @@ class SettingsModal(QDialog):
         self.parent_window.server_url = self.txt_host_url.text().strip()
         self.parent_window.room_id = self.txt_room_id.text().strip()
         self.parent_window.hide_ui_on_transparent = self.chk_hide_ui_on_transparent.isChecked()
+        self.parent_window.show_intro = self.chk_show_intro.isChecked()
         
         # Apply updated ui hiding right away
         self.parent_window.update_ui_visibility()
@@ -4702,6 +4716,7 @@ class MagnifierWindow(QMainWindow):
         self.hide_ui_on_transparent = False
         self.client_id = None
         self.player_class = "홀리나이트"
+        self.show_intro = True
         self.developer_capture_mode = False
         self.detector.developer_capture_enabled = False
         self.boss_debuff_config = self.default_boss_debuff_config()
@@ -4728,6 +4743,7 @@ class MagnifierWindow(QMainWindow):
                     self.hide_ui_on_transparent = data.get('hide_ui_on_transparent', False)
                     self.client_id = data.get('client_id', None)
                     self.player_class = data.get('player_class', "홀리나이트")
+                    self.show_intro = bool(data.get('show_intro', True))
                     # Cooldown OCR/developer capture was retired in v2.46.
                     # Ignore legacy flags so old configs migrate to manual mode.
                     self.developer_capture_mode = False
@@ -4945,6 +4961,7 @@ class MagnifierWindow(QMainWindow):
                 'hide_ui_on_transparent': self.hide_ui_on_transparent,
                 'client_id': self.client_id,
                 'player_class': getattr(self, 'player_class', "홀리나이트"),
+                'show_intro': bool(getattr(self, 'show_intro', True)),
                 'skills': skills_data,
                 'party_panel_pos': party_pos,
                 'party_panel_size': party_size,
@@ -6075,6 +6092,38 @@ if __name__ == '__main__':
     except Exception:
         pass
         
-    window = MagnifierWindow()
-    window.show()
+    window = None
+
+    def launch_main_window():
+        """인트로가 끝난 뒤(또는 인트로 없이) 본 창을 만들고 띄운다."""
+        global window
+        try:
+            window = MagnifierWindow()
+            window.show()
+        except Exception:
+            traceback.print_exc()
+            app.quit()
+            return
+        # 인트로 동안 껐던 자동 종료를 되돌린다.
+        app.setQuitOnLastWindowClosed(True)
+
+    # 인트로는 창 생성보다 먼저 뜬다. MagnifierWindow() 생성은 감지 스레드까지
+    # 세우느라 이벤트 루프를 막아서, 애니메이션 중간에 만들면 눈에 보이게
+    # 끊긴다. 그래서 인트로를 끝까지 재생한 뒤 창을 만든다.
+    intro = None
+    if intro_animation.intro_enabled():
+        try:
+            intro = intro_animation.create_intro()
+        except Exception:
+            intro = None
+
+    if intro is not None:
+        # 인트로 창이 닫힐 때 본 창이 아직 없으면 마지막 창이 사라진 것으로
+        # 간주돼 앱이 그대로 종료된다.
+        app.setQuitOnLastWindowClosed(False)
+        intro.finished.connect(launch_main_window)
+        intro.start()
+    else:
+        launch_main_window()
+
     sys.exit(app.exec())

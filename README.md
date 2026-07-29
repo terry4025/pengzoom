@@ -88,6 +88,40 @@ python magnifier.py
 
 ---
 
+## 🐧 기동 인트로 (신규)
+
+앱이 켜질 때 펭구 마스코트가 튀어 올라 손을 흔들고 윙크하는 1.5초짜리 인트로가
+투명 창에 재생됩니다. 재생 중 **클릭이나 ESC로 즉시 건너뛸 수 있고**,
+`설정 → 표시 옵션 → 시작할 때 마스코트 인트로 보여주기` 로 끌 수 있습니다.
+
+### 왜 영상이 아니라 프레임 시퀀스인가
+Qt의 `QMediaPlayer`/`QVideoWidget` 는 알파를 보존하지 않아, 투명 배경 영상을
+띄우면 캐릭터 뒤에 검은 사각형이 남습니다. 그래서 알파가 있는 PNG 프레임을
+투명 창 위에 `QPainter` 로 직접 그립니다.
+
+### 그림 6장으로 움직이는 방법
+중간 동작은 그림이 아니라 변환으로 만듭니다. 등장 스쿼시, 정착 스트레치, 퇴장
+페이드는 코드가 보간하고, 손 흔들기는 `중립 ↔ 손들기` 두 장을 왕복시켜 두 번
+흔듭니다. 생성 모델에 24장을 요구하면 칸마다 캐릭터가 미세하게 달라져 재생 시
+떨림으로 보이는데, 이 구조는 그 위험을 없앱니다.
+
+### 프레임 정규화
+원본 시트는 칸마다 캐릭터 위치가 흔들립니다(실측: 배 중심 x가 최대 62px 차이).
+`tools/build_intro_frames.py` 가 **발바닥 기준선**과 **배 타원 중심·폭**을 기준으로
+모든 프레임을 한 캔버스에 다시 얹습니다. 배 타원은 날개를 들거나 펼쳐도 변하지
+않아 포즈에 흔들리지 않는 척도입니다. 배율은 항상 1.0 이하만 써서(가장 작은
+프레임 기준) 확대로 선이 흐려지는 일이 없고, 고DPI 화면에서는 물리 픽셀 기준으로
+상한을 한 번 더 낮춥니다.
+
+새 시트로 교체할 때:
+```bash
+py tools/build_intro_frames.py --sheet intro_assets/새시트.png --cols 3 --rows 2
+py design_preview/verify_intro.py   # 타임라인을 한 장으로 붙여 눈으로 확인
+py tests/test_intro_animation.py    # 정렬·타임라인·건너뛰기 검사
+```
+
+---
+
 ## 📦 다시 단일 실행파일(.exe)로 빌드하기
 빌드 정의는 `pengzoom.spec` 한 곳에 모여 있습니다. 동봉할 데이터 파일, 숨은 import,
 제외 모듈, 실행파일 이름(`magnifier.py`의 `APP_VERSION`에서 자동으로 따옵니다)이
@@ -105,9 +139,9 @@ pyinstaller --noconfirm pengzoom.spec
 `dist/펭구 줌인 <버전> Pro.exe` 하나가 생성됩니다.
 
 보스 디버프 아이콘 템플릿(`boss_debuff_assets/icons`)과 숫자 글리프
-프로파일(`boss_debuff_assets/timer_profiles`), 쿨타임 OCR 프로파일(`ocr_profiles`)은
-스펙이 이미 동봉하므로 `--add-data` 를 따로 붙일 필요가 없습니다.
-동봉 누락은 `tests/test_build_spec.py` 가 검사합니다.
+프로파일(`boss_debuff_assets/timer_profiles`), 쿨타임 OCR 프로파일(`ocr_profiles`),
+인트로 프레임(`intro_assets/frames`)은 스펙이 이미 동봉하므로 `--add-data` 를
+따로 붙일 필요가 없습니다. 동봉 누락은 `tests/test_build_spec.py` 가 검사합니다.
 
 ### 3. 기동 실패를 진단할 때
 `--windowed` 빌드는 stdout/stderr가 사라져서 원인을 볼 수 없습니다.
@@ -126,7 +160,7 @@ python tests/test_build_spec.py
 ```
 `tests/` 아래 파일은 표준 `unittest` 기반이라 별도 러너 없이 개별 실행됩니다.
 `tests/` 는 패키지가 아니라 `unittest discover` 로는 모이지 않으니, 전부 돌릴 때는
-파일을 훑어 주세요 (현재 10개 파일 159개).
+파일을 훑어 주세요 (현재 11개 파일 192개).
 
 ```powershell
 Get-ChildItem tests\test_*.py | ForEach-Object { py $_.FullName }

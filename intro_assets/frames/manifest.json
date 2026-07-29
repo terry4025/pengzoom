@@ -1,0 +1,99 @@
+{
+  "source_sheet": "mascot_intro_sheet_v1.png",
+  "grid": {
+    "cols": 3,
+    "rows": 2,
+    "cell": [
+      512,
+      512
+    ]
+  },
+  "canvas": [
+    340,
+    341
+  ],
+  "anchor": [
+    170,
+    331
+  ],
+  "frames": [
+    {
+      "file": "frame_1.png",
+      "scale": 0.9459,
+      "belly_width": 148.0,
+      "baseline_y": 330,
+      "belly_center_x": 169.5,
+      "bbox": [
+        26,
+        15,
+        310,
+        330
+      ]
+    },
+    {
+      "file": "frame_2.png",
+      "scale": 0.9589,
+      "belly_width": 146.0,
+      "baseline_y": 331,
+      "belly_center_x": 170.0,
+      "bbox": [
+        11,
+        10,
+        330,
+        331
+      ]
+    },
+    {
+      "file": "frame_3.png",
+      "scale": 0.9459,
+      "belly_width": 148.0,
+      "baseline_y": 330,
+      "belly_center_x": 170.5,
+      "bbox": [
+        26,
+        15,
+        311,
+        330
+      ]
+    },
+    {
+      "file": "frame_4.png",
+      "scale": 1.0,
+      "belly_width": 140.0,
+      "baseline_y": 330,
+      "belly_center_x": 170.5,
+      "bbox": [
+        15,
+        9,
+        309,
+        330
+      ]
+    },
+    {
+      "file": "frame_5.png",
+      "scale": 0.979,
+      "belly_width": 143.0,
+      "baseline_y": 330,
+      "belly_center_x": 169.5,
+      "bbox": [
+        26,
+        16,
+        308,
+        330
+      ]
+    },
+    {
+      "file": "frame_6.png",
+      "scale": 0.9589,
+      "belly_width": 146.0,
+      "baseline_y": 331,
+      "belly_center_x": 169.5,
+      "bbox": [
+        31,
+        23,
+        306,
+        331
+      ]
+    }
+  ]
+}

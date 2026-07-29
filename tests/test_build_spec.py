@@ -192,6 +192,21 @@ class FrozenLayoutTests(unittest.TestCase):
         path = cooldown_ocr._resource_path(f"ocr_profiles/{cooldown_ocr.DEFAULT_PROFILE_ID}.json")
         self.assertTrue(path.exists(), f"번들 OCR 프로파일이 없습니다: {path}")
 
+    def test_intro_frames_are_found(self):
+        # 인트로 자원이 빠지면 예외 없이 인트로만 조용히 사라진다(create_intro가
+        # None을 준다). 그래서 번들 배치를 여기서 확인해 둔다.
+        import intro_animation
+
+        self.assertEqual(intro_animation.assets_root(),
+                         self.bundle / "intro_assets" / "frames")
+        self.assertTrue(intro_animation.assets_available(),
+                        "번들에 인트로 프레임/매니페스트가 없습니다.")
+
+    def test_intro_sheet_is_not_shipped(self):
+        # 원본 스프라이트 시트(1.5MB)는 프레임을 만드는 입력일 뿐이다.
+        leaked = list((self.bundle / "intro_assets").rglob("*sheet*"))
+        self.assertEqual(leaked, [], f"원본 시트가 배포본에 들어갔습니다: {leaked}")
+
 
 if __name__ == "__main__":
     unittest.main()
